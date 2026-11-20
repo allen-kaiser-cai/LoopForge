@@ -22,7 +22,7 @@ import (
 // 不带令牌访问 /personal_access_tokens/self 返回 401，说明端点存在。
 // 工蜂对能用的个人访问令牌也会在这个端点返回 404，不能据此判定令牌类型。
 // 只有 /user 里的 private_token 与所填令牌相同，才是不能克隆仓库的私人令牌。
-var gongfengAPIBase = "https://git.example.com/api/v3"
+var gongfengAPIBase = "http://gitlabnew.inter.wcansoft.com/api/v4"
 
 var requiredGitTokenScopes = []string{"read_repository", "write_repository"}
 
@@ -124,7 +124,7 @@ func gongfengTokenSelf(ctx context.Context, token string) ([]string, string, err
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := gongfengDo(ctx, client, gongfengAPIBase+"/personal_access_tokens/self", token)
 	if err != nil {
-		return nil, "", fmt.Errorf("无法连接工蜂（git.example.com）：%v", err)
+		return nil, "", fmt.Errorf("无法连接工蜂（gitlabnew.inter.wcansoft.com）：%v", err)
 	}
 	defer resp.Body.Close()
 	var info struct {
@@ -160,7 +160,7 @@ func gongfengTokenSelf(ctx context.Context, token string) ([]string, string, err
 func gongfengTokenUser(ctx context.Context, client *http.Client, token string) (string, error) {
 	resp, err := gongfengDo(ctx, client, gongfengAPIBase+"/user", token)
 	if err != nil {
-		return "", fmt.Errorf("无法连接工蜂（git.example.com）：%v", err)
+		return "", fmt.Errorf("无法连接工蜂（gitlabnew.inter.wcansoft.com）：%v", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {

@@ -28,7 +28,7 @@ func liveExecutorArgs(kind string) []string {
 	case "codex":
 		return []string{"exec", "--json", "--sandbox", "workspace-write", "--skip-git-repo-check"}
 	case "claude-code":
-		return []string{"-p", "--output-format", "stream-json", "--permission-mode", "dontAsk"}
+		return []string{"-p", "--verbose", "--output-format", "stream-json", "--permission-mode", "dontAsk"}
 	default:
 		return nil
 	}

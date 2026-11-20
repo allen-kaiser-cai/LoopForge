@@ -40,7 +40,7 @@ func ParseGongfengMR(text string) (project string, iid int, url string, ok bool)
 // ParseGongfengMRs extracts unique Gongfeng merge request URLs in appearance order.
 func ParseGongfengMRs(text string) []GongfengMRRef {
 	for _, match := range githubPRURL.FindAllStringSubmatch(text, -1) {
-		text = strings.ReplaceAll(text, match[0], "https://git.example.com/github:"+match[1]+"/merge_requests/"+match[2])
+		text = strings.ReplaceAll(text, match[0], "http://gitlabnew.inter.wcansoft.com/github:"+match[1]+"/merge_requests/"+match[2])
 	}
 	matches := gongfengMRURL.FindAllStringSubmatch(text, -1)
 	if len(matches) == 0 {

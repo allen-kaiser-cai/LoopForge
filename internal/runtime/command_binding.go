@@ -300,8 +300,8 @@ func bindGitEnvironment(sandbox Sandbox, workspace string, environment map[strin
 			token = stripped
 		}
 	}
-	prefixes := []string{"git@git.example.com:", "ssh://git@git.example.com/", "https://git.example.com/", "http://git.example.com/"}
-	authed := "https://" + url.UserPassword(user, token).String() + "@git.example.com/"
+	prefixes := []string{"git@gitlabnew.inter.wcansoft.com:", "ssh://git@gitlabnew.inter.wcansoft.com/", "http://gitlabnew.inter.wcansoft.com/", "http://gitlabnew.inter.wcansoft.com/"}
+	authed := "http://" + url.UserPassword(user, token).String() + "@gitlabnew.inter.wcansoft.com/"
 	environment["GIT_CONFIG_COUNT"] = strconv.Itoa(len(prefixes))
 	for index, prefix := range prefixes {
 		environment[fmt.Sprintf("GIT_CONFIG_KEY_%d", index)] = "url." + authed + ".insteadof"

@@ -16,9 +16,9 @@ import (
 )
 
 const (
-	defaultAuthorizeURL = "https://git.example.com/oauth/authorize"
-	defaultTokenURL     = "https://git.example.com/oauth/token"
-	defaultAPIBase      = "https://git.example.com/api/v3"
+	defaultAuthorizeURL = "http://gitlabnew.inter.wcansoft.com/oauth/authorize"
+	defaultTokenURL     = "http://gitlabnew.inter.wcansoft.com/oauth/token"
+	defaultAPIBase      = "http://gitlabnew.inter.wcansoft.com/api/v4"
 	// Repository clone and push need both scopes. The application must allow them.
 	RepositoryScope = "read_repository write_repository"
 	defaultTTL      = 2 * time.Hour
@@ -30,7 +30,7 @@ const (
 // while the caller holds the user's refresh lock, so it must never hang.
 var httpClient = &http.Client{Timeout: 15 * time.Second}
 
-// Config is the OAuth application registered on git.example.com.
+// Config is the OAuth application registered on gitlabnew.inter.wcansoft.com.
 type Config struct {
 	ClientID     string
 	ClientSecret string
