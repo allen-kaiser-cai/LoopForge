@@ -734,7 +734,8 @@ func (e *Engine) executeNode(ctx context.Context, runID string, wf domain.Workfl
 			if warning := knowledgeSkippedWarning(agent, assets); warning != "" {
 				warnMCPSkipped(warning)
 			}
-			options := runtime.InvocationOptions{RunID: runID, NodeID: node.ID, ResumeSessionID: resumeSessionID, Repositories: current.RepositoryContexts()}
+			options := runtime.InvocationOptions{
+				Interactive: node.Interactive, RunID: runID, NodeID: node.ID, ResumeSessionID: resumeSessionID, Repositories: current.RepositoryContexts()}
 			if requiresSubmit {
 				options.GateResultPath = gateResultPath(nodeControlKey(current, node.ID), attempt)
 			}

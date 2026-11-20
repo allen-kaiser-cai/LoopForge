@@ -40,7 +40,10 @@ type WorkflowNode struct {
 	// TaskPrompt is what an approval node asks its approver to check
 	// (「需要确认什么」). Role nodes take their whole brief from the role's
 	// prompt; the field is not read for them.
-	TaskPrompt   string   `json:"taskPrompt,omitempty"`
+	TaskPrompt string `json:"taskPrompt,omitempty"`
+	// Interactive 表示该节点要以「终端接管」方式执行：平台在员工机器上
+	// 起一个 tmux 会话运行 Agent，人进入会话交互，完成后由人执行提交命令。
+	Interactive  bool     `json:"interactive,omitempty"`
 	RequestedBy  string   `json:"requestedBy,omitempty"`
 	RequestID    string   `json:"requestId,omitempty"`
 	ClaimedFiles []string `json:"claimedFiles,omitempty"`
@@ -69,7 +72,11 @@ type WorkflowNode struct {
 	MaxAttempts           int                `json:"maxAttempts"`
 	MaxReworks            int                `json:"maxReworks"`
 	Notifications         []NodeNotification `json:"notifications,omitempty"`
-	Position              Position           `json:"position"`
+	// Approvers 限定该节点只能由这些平台登录名审批；为空表示不限制。
+	Approvers []string `json:"approvers,omitempty"`
+	// ApproverLabel 是审批职责的显示名，例如“产品经理”。
+	ApproverLabel string   `json:"approverLabel,omitempty"`
+	Position      Position `json:"position"`
 }
 
 // ValidateWorkflowMetricStages prevents silently dropping a mistyped stage.
@@ -187,9 +194,13 @@ type WorkflowDefinition struct {
 	MetricCategory string `json:"metricCategory,omitempty"`
 	// SOPLane 是受控的角色链标签（产品/前端/后端/修复），一条需求上可并列多条。
 	// 和 MetricCategory 正交：category 回答「需求还是 Bug」，lane 回答「哪条角色链」。
-	SOPLane      string                `json:"sopLane,omitempty"`
-	Generic      bool                  `json:"generic,omitempty"`
-	Requirements []WorkflowRequirement `json:"requirements,omitempty"`
+	SOPLane string `json:"sopLane,omitempty"`
+	// ExecutionTarget 决定这条流程落在哪类执行机上：
+	// personal = 责任人自己的电脑（人机协同、需要个人知识/技能）；cloud = 云池（无人值守的标准动作）。
+	// 空值沿用历史行为（云池优先）。
+	ExecutionTarget string                `json:"executionTarget,omitempty"`
+	Generic         bool                  `json:"generic,omitempty"`
+	Requirements    []WorkflowRequirement `json:"requirements,omitempty"`
 	// SandboxSnapshot is populated only on Run.WorkflowSnapshot. It freezes
 	// the resolved profile plus Dockerfile/environment payload so retries can
 	// reconstruct the original environment after catalog definitions change.

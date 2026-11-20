@@ -2,6 +2,7 @@ package domain
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -72,4 +73,42 @@ func workBranchSegment(value string) string {
 		return "run"
 	}
 	return result
+}
+
+// SpecWorkBranch 按《SSP 分支命名规范》生成工作分支：
+// {类型前缀}-{YYYYMMDD}-{姓名拼音}-{中文描述}
+// 类型仅四种：feature / hotfix / refactoring / optimization；bug 一律 hotfix。
+func SpecWorkBranch(issue Issue, author string, now time.Time) string {
+	prefix := "feature"
+	kind := strings.ToLower(strings.TrimSpace(issue.Kind))
+	title := strings.TrimSpace(issue.Title)
+	if kind == "bug" || strings.Contains(title, "线上bug") || strings.Contains(title, "【bug】") {
+		prefix = "hotfix"
+	}
+	day := now.In(time.FixedZone("CST", 8*3600)).Format("20060102")
+	name := strings.ToLower(strings.TrimSpace(author))
+	name = regexp.MustCompile(`[^a-z0-9]`).ReplaceAllString(name, "")
+	if name == "" {
+		name = "unknown"
+	}
+	desc := specBranchDescription(title)
+	if desc == "" {
+		desc = "未命名改动"
+	}
+	return prefix + "-" + day + "-" + name + "-" + desc
+}
+
+// specBranchDescription 从需求/缺陷标题提炼分支描述：去掉禅道前缀和标点，最多 30 个字符。
+func specBranchDescription(title string) string {
+	t := strings.TrimSpace(title)
+	// 去掉 [禅道#123] / 「线上bug」 / 【bug】 等前缀标记
+	t = regexp.MustCompile(`^[\[【(（][^\]】)）]{0,30}[\]】)）]\s*`).ReplaceAllString(t, "")
+	t = regexp.MustCompile(`[「」【】\[\]()（）<>《》]`).ReplaceAllString(t, "")
+	// 只保留中文、字母、数字；其他字符视为分隔
+	t = regexp.MustCompile(`[^\p{Han}A-Za-z0-9]+`).ReplaceAllString(t, "")
+	runes := []rune(t)
+	if len(runes) > 30 {
+		runes = runes[:30]
+	}
+	return string(runes)
 }

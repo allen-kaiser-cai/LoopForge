@@ -58,6 +58,8 @@ type ProviderCredential struct {
 }
 
 type InvocationOptions struct {
+	// Interactive 走终端接管模式：runner 在 tmux 会话里启动 CLI，等人工提交。
+	Interactive     bool
 	RunID           string
 	NodeID          string
 	ResumeSessionID string

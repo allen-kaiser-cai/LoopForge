@@ -77,7 +77,7 @@ const (
 	runnerLongPollDefault    = 30 * time.Second
 	runnerDBPollDefault      = time.Second
 	runnerOfflineThreshold   = 90 * time.Second
-	runnerTaskLeaseTTL       = 120 * time.Second
+	runnerTaskLeaseTTL       = 300 * time.Second
 	runnerSweepInterval      = 15 * time.Second
 	runnerSessionTokenPrefix = "afr_"
 	runnerSessionTTL         = 30 * 24 * time.Hour

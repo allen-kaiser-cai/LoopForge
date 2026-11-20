@@ -7,6 +7,7 @@ import (
 )
 
 type Issue struct {
+	BranchLine     string `json:"branchLine,omitempty"`
 	ID             string `json:"id"`
 	ProjectID      string `json:"projectId"`
 	Number         int    `json:"number"`

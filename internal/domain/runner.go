@@ -434,20 +434,22 @@ type RunnerInvocation struct {
 	// paths resolved by the control plane. RecoverOutputs lets the runner
 	// move a missing output file found elsewhere in the workspace into
 	// place, as the control plane does for its own sandboxes.
-	ReportOutputs                bool     `json:"reportOutputs,omitempty"`
-	OutputFiles                  []string `json:"outputFiles,omitempty"`
-	RecoverOutputs               bool     `json:"recoverOutputs,omitempty"`
-	HumanContext                 string   `json:"humanContext,omitempty"`
-	CredentialSource             string   `json:"credentialSource,omitempty"`
-	CodeBuddyAPIKey              string   `json:"codebuddyApiKey,omitempty"`
-	CodeBuddyInternetEnvironment string   `json:"codebuddyInternetEnvironment,omitempty"`
-	CodexAPIKey                  string   `json:"codexApiKey,omitempty"`
-	CodexBaseURL                 string   `json:"codexBaseUrl,omitempty"`
-	ClaudeCodeAPIKey             string   `json:"claudeCodeApiKey,omitempty"`
-	ClaudeCodeBaseURL            string   `json:"claudeCodeBaseUrl,omitempty"`
-	AgentCLIAPIKey               string   `json:"agentCliApiKey,omitempty"`
-	AgentCLIBaseURL              string   `json:"agentCliBaseUrl,omitempty"`
-	AgentCLIProtocol             string   `json:"agentCliProtocol,omitempty"`
+	ReportOutputs    bool     `json:"reportOutputs,omitempty"`
+	OutputFiles      []string `json:"outputFiles,omitempty"`
+	RecoverOutputs   bool     `json:"recoverOutputs,omitempty"`
+	HumanContext     string   `json:"humanContext,omitempty"`
+	CredentialSource string   `json:"credentialSource,omitempty"`
+	// Interactive 表示终端接管模式：runner 在 tmux 会话里启动 CLI，等人提交后收尾。
+	Interactive                  bool   `json:"interactive,omitempty"`
+	CodeBuddyAPIKey              string `json:"codebuddyApiKey,omitempty"`
+	CodeBuddyInternetEnvironment string `json:"codebuddyInternetEnvironment,omitempty"`
+	CodexAPIKey                  string `json:"codexApiKey,omitempty"`
+	CodexBaseURL                 string `json:"codexBaseUrl,omitempty"`
+	ClaudeCodeAPIKey             string `json:"claudeCodeApiKey,omitempty"`
+	ClaudeCodeBaseURL            string `json:"claudeCodeBaseUrl,omitempty"`
+	AgentCLIAPIKey               string `json:"agentCliApiKey,omitempty"`
+	AgentCLIBaseURL              string `json:"agentCliBaseUrl,omitempty"`
+	AgentCLIProtocol             string `json:"agentCliProtocol,omitempty"`
 	// MCPCallServers is the project/personal HTTP MCP set for `agentflow mcp call`
 	// in scripts, verification gates, and Agent hooks. It is unbound; personal
 	// credentials are applied in memory on the runner. Agent Assets stay
