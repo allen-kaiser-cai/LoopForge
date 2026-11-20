@@ -179,7 +179,10 @@ func (e *Engine) dispatchRunnerTask(ctx context.Context, runnerID string, run do
 	if err := e.requireRunnerProvider(runnerID, ex.Kind); err != nil {
 		return "", err
 	}
-	runner, _ := e.repo.Runner(runnerID)
+	runner, runnerOK := e.repo.Runner(runnerID)
+	if err := e.preflightRunnerExecution(ctx, runner, runnerOK, ex, run.ExecutionContext.ResponsibleUserID); err != nil {
+		return "", err
+	}
 	authMode := runner.RuntimeAuthMode(ex.Kind)
 	resumeSessionID := resolveRunnerResumeSessionID(run, node.ID, options)
 	invocation := &domain.RunnerInvocation{
@@ -194,6 +197,7 @@ func (e *Engine) dispatchRunnerTask(ctx context.Context, runnerID string, run do
 		Artifacts:        node.ArtifactOutputs,
 		HumanContext:     run.HumanContext,
 		CredentialSource: authMode,
+		Interactive:      options.Interactive,
 		GateResultPath:   options.GateResultPath,
 	}
 	if strings.TrimSpace(options.GateResultPath) != "" {
@@ -890,6 +894,62 @@ func restoreRunnerArtifacts(sandboxWorkspace string, contracts []domain.Artifact
 		}
 		if err := os.WriteFile(target, []byte(content), 0o644); err != nil {
 			return err
+		}
+	}
+	return nil
+}
+
+// preflightRunnerExecution 在真正下发任务前做执行机自检，避免任务派到一台
+// 在线但缺少 CLI / 凭据的机器上，跑一半才失败。
+func (e *Engine) preflightRunnerExecution(ctx context.Context, runner domain.Runner, runnerOK bool, ex domain.ExecutorDefinition, userID int64) error {
+	if !runnerOK {
+		return fmt.Errorf("执行机不存在或已注销，请重新绑定（任务未下发）")
+	}
+	name := strings.TrimSpace(runner.Name)
+	if name == "" {
+		name = runner.ID
+	}
+	if runner.LastSeenAt == nil || time.Since(*runner.LastSeenAt) > 5*time.Minute {
+		seen := "从未上报"
+		if runner.LastSeenAt != nil {
+			seen = runner.LastSeenAt.Local().Format("2006-01-02 15:04:05")
+		}
+		return fmt.Errorf("执行机「%s」已离线（最后心跳：%s）。请先启动该机器上的 Runner 或改用其他执行机", name, seen)
+	}
+	if ex.Kind != "" && !domain.IsAgentCLIKind(ex.Kind) {
+		found := false
+		online := false
+		for _, rt := range runner.Runtimes {
+			if !strings.EqualFold(strings.TrimSpace(rt.Provider), strings.TrimSpace(ex.Kind)) {
+				continue
+			}
+			found = true
+			online = strings.EqualFold(rt.Status, domain.RuntimeStatusOnline)
+			break
+		}
+		if !found {
+			return fmt.Errorf("执行机「%s」没有安装 %s，请在该机器安装并登录后再试", name, ex.Name)
+		}
+		if !online {
+			return fmt.Errorf("执行机「%s」上的 %s 当前不可用（未登录或被禁用），请先在终端确认 CLI 可用", name, ex.Name)
+		}
+	}
+	if strings.TrimSpace(e.repo.GitCredential(ctx, userID)) == "" {
+		return fmt.Errorf("责任人未配置 Git 令牌，无法拉取仓库。请在「个人配置 → 代码托管」配置 GitLab 访问令牌后重试")
+	}
+	if runner.RuntimeAuthMode(ex.Kind) == domain.RuntimeAuthPersonal {
+		user, ok := e.repo.User(userID)
+		if ok {
+			switch ex.Kind {
+			case "claude-code":
+				if strings.TrimSpace(user.ClaudeCodeAPIKey) == "" {
+					return fmt.Errorf("执行机使用「平台凭据」模式，但责任人未配置 Claude Code API Key，请在「个人配置 → 模型凭据」配置后重试")
+				}
+			case "codex":
+				if strings.TrimSpace(user.CodexAPIKey) == "" {
+					return fmt.Errorf("执行机使用「平台凭据」模式，但责任人未配置 Codex API Key，请在「个人配置 → 模型凭据」配置后重试")
+				}
+			}
 		}
 	}
 	return nil

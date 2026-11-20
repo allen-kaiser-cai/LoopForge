@@ -90,6 +90,13 @@ func dispatchIssue(d *deps, req dispatchRequest) (domain.Task, error) {
 			}
 		}
 	}
+	// 人机协同流程（executionTarget=personal）按需求单的指派人选执行机：
+	// 派发动作可能由管理员/测试触发，但真正要在自己电脑上干活的是需求责任人。
+	if wf, ok := d.repo.Workflow(workflowID); ok && strings.EqualFold(strings.TrimSpace(wf.ExecutionTarget), "personal") {
+		if issue.AssigneeUserID > 0 {
+			runUserID = issue.AssigneeUserID
+		}
+	}
 	hasSameSOP := d.repo.IssueHasTaskForWorkflow(issue.ID, workflowID)
 	// A schedule only picks up untouched issues; another SOP lane is a human decision.
 	if scheduled && d.repo.IssueHasTask(issue.ID) {

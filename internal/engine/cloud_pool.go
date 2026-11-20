@@ -50,6 +50,14 @@ func ParseCloudRunnerProjects(raw string) []string {
 // cloudPoolRunner picks an online pool runner for a new run of projectID.
 // It reports false when the pool is off for the project or has no runner
 // able to execute a run end to end; the run then executes on this host.
+// cloudPoolServesProject reports whether the project is configured to use the cloud pool.
+func (e *Engine) cloudPoolServesProject(projectID string) bool {
+	e.mu.Lock()
+	pool := e.cloudPool
+	e.mu.Unlock()
+	return pool.Label != "" && cloudPoolServes(pool.Projects, projectID)
+}
+
 func (e *Engine) cloudPoolRunner(projectID string) (domain.Runner, bool) {
 	e.mu.Lock()
 	pool := e.cloudPool

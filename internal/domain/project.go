@@ -6,14 +6,25 @@ import (
 	"time"
 )
 
+// BranchLine 定义一条环境线的基线分支与提测/验证目标分支。
+// TestBranch 为空表示该客户线没有独立测试分支，改动直接合回 BaseBranch。
+type BranchLine struct {
+	BaseBranch string `json:"baseBranch"`
+	TestBranch string `json:"testBranch,omitempty"`
+	// Disabled 表示该环境线不由本平台处理（例如代码已迁到云效）。
+	Disabled bool   `json:"disabled,omitempty"`
+	Note     string `json:"note,omitempty"`
+}
+
 type Project struct {
-	BusinessDomainID string `json:"businessDomainId,omitempty"`
-	ID               string `json:"id"`
-	Key              string `json:"key"`
-	Name             string `json:"name"`
-	Description      string `json:"description"`
-	Color            string `json:"color"`
-	WorkflowID       string `json:"workflowId,omitempty"`
+	BranchLines      map[string]BranchLine `json:"branchLines,omitempty"`
+	BusinessDomainID string                `json:"businessDomainId,omitempty"`
+	ID               string                `json:"id"`
+	Key              string                `json:"key"`
+	Name             string                `json:"name"`
+	Description      string                `json:"description"`
+	Color            string                `json:"color"`
+	WorkflowID       string                `json:"workflowId,omitempty"`
 	// SOPPlaybooks are named requirement combos (e.g. 完整需求 / 仅后端).
 	// A requirement picks one; it does not inherit a single project-wide chain.
 	SOPPlaybooks []SOPPlaybook `json:"sopPlaybooks,omitempty"`
@@ -151,7 +162,7 @@ type RepositoryContext struct {
 
 // GongfengRepoHost is the hostname of the optional legacy GitLab-compatible
 // hosting service. Repository links pasted by users are normalized against it.
-const GongfengRepoHost = "git.example.com"
+const GongfengRepoHost = "gitlabnew.inter.wcansoft.com"
 
 // GongfengRepoInfo carries the repository identity parsed out of a pasted
 // Gongfeng link, so a repository can be configured with a single URL.
@@ -231,10 +242,10 @@ func ParseGongfengRepoURL(raw string) (GongfengRepoInfo, bool) {
 	}
 	info := GongfengRepoInfo{Project: project}
 	info.Name = project[strings.LastIndex(project, "/")+1:]
-	info.WebURL = "https://" + GongfengRepoHost + "/" + project
+	info.WebURL = "http://" + GongfengRepoHost + "/" + project
 	info.CloneURL = info.WebURL + ".git"
 	if sshClone {
-		info.CloneURL = "git@" + GongfengRepoHost + ":" + project + ".git"
+		info.CloneURL = "http://" + GongfengRepoHost + "/" + project + ".git"
 	}
 	return info, true
 }

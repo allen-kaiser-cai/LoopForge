@@ -269,5 +269,6 @@ func appendArtifactContract(prompt string, node domain.WorkflowNode, repositorie
 		}
 		fmt.Fprintf(&b, "- `%s`: %s (%s, %s)\n", contract.Path, contract.Name, contract.MediaType, required)
 	}
+	b.WriteString("\n单个产物文件请控制在 256 KB 以内（硬上限 1 MB，超限会被截断保存）。内容较多时请精简或用 mermaid 代码块代替图片，不要把大段日志整段复制进产物。\n")
 	return b.String()
 }

@@ -507,6 +507,7 @@ type RunnerInvocation struct {
 	// AgentCLIModels is the responsible user's saved catalog for the agent
 	// CLI; Cursor resolves the model's effort to an ID from it.
 	AgentCLIModels []CLIModel `json:"agentCliModels,omitempty"`
+	Interactive bool `json:"interactive,omitempty"`
 	// MCPCallServers is the project/personal HTTP MCP set for `agentflow mcp call`
 	// in scripts, verification gates, and Agent hooks. It is unbound; personal
 	// credentials are applied in memory on the runner. Agent Assets stay

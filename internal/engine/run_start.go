@@ -4,6 +4,8 @@ import (
 	"agentflow/internal/domain"
 	"context"
 	"fmt"
+	"log"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -115,10 +117,45 @@ func (e *Engine) startWorkflowDefinition(wf domain.WorkflowDefinition, input str
 	}
 	now := time.Now().UTC()
 	id := fmt.Sprintf("run-%d", now.UnixNano())
+	// 客户线：按工作项的 branchLine 把仓库基线切到对应环境线
+	// （如禾城用 master-禾城农商行，资源中心用 dev_zyzx）。
+	if issueID := strings.TrimSpace(executionContext.IssueID); issueID != "" {
+		if issue, ok := e.repo.Issue(issueID); ok {
+			line := strings.TrimSpace(issue.BranchLine)
+			if line != "" {
+				if project, found := e.repo.Project(issue.ProjectID); found {
+					if def, hit := project.BranchLines[line]; hit && def.Disabled {
+						note := strings.TrimSpace(def.Note)
+						if note == "" {
+							note = "该环境线不由本平台处理"
+						}
+						return domain.Run{}, fmt.Errorf("环境线 %s 已停用：%s", line, note)
+					} else if def, hit := project.BranchLines[line]; hit && strings.TrimSpace(def.BaseBranch) != "" {
+						for i := range repositories {
+							repositories[i].BaseBranch = strings.TrimSpace(def.BaseBranch)
+						}
+						log.Printf("branch line %s: base branch -> %s (run %s)", line, def.BaseBranch, id)
+					} else {
+						log.Printf("branch line %s: 项目未配置该环境线，沿用默认基线 %s", line, firstRepositoryBase(repositories))
+					}
+				}
+			}
+		}
+	}
 	assignWorkBranches(repositories, func() string {
 		issueID := strings.TrimSpace(executionContext.IssueID)
 		if issueID != "" {
 			if issue, ok := e.repo.Issue(issueID); ok {
+				author := ""
+				if user, found := e.repo.User(executionContext.ResponsibleUserID); found {
+					author = user.LoginName
+				}
+				branch := domain.SpecWorkBranch(issue, author, now)
+				valid := regexp.MustCompile(`^(feature|hotfix|refactoring|optimization)-[0-9]{8}-[a-z0-9]+-[^ /]+$`)
+				if valid.MatchString(branch) {
+					return branch
+				}
+				log.Printf("branch naming: %q 不符合 SSP 规范，回退默认命名", branch)
 				return domain.DefaultWorkBranch(issue, now)
 			}
 		}
@@ -131,7 +168,34 @@ func (e *Engine) startWorkflowDefinition(wf domain.WorkflowDefinition, input str
 	executionContext.RunID, executionContext.TraceID, executionContext.WorkflowID, executionContext.WorkflowVersion = id, id, workflowID, wf.Version
 	if executionContext.ParentRunID == "" && !executionContext.ExecutionPinned {
 		executionContext.ExecutionRunnerID = e.repo.DefaultRunner(executionContext.ResponsibleUserID)
+	if executionContext.ParentRunID == "" {
 		executionContext.WorkspaceRunID = ""
+		// 执行目标按流程配置决定：
+		// - personal：人机协同流程，固定落在责任人自己的电脑上；
+		// - cloud：无人值守的标准动作，落在云池；
+		// - 空值：沿用历史行为（云池优先，个人默认机兜底）。
+		switch strings.ToLower(strings.TrimSpace(wf.ExecutionTarget)) {
+		case "personal":
+			executionContext.ExecutionPool = ""
+			executionContext.ExecutionRunnerID = e.repo.DefaultRunner(executionContext.ResponsibleUserID)
+			if executionContext.ExecutionRunnerID == "" {
+				return domain.Run{}, fmt.Errorf("该流程要求在人机协同模式下执行，但责任人（用户 %d）还没有绑定默认执行机，请先在执行机器页面绑定", executionContext.ResponsibleUserID)
+			}
+		case "cloud":
+			executionContext.ExecutionPool = domain.ExecutionModeCloud
+			if runner, ok := e.cloudPoolRunner(executionContext.ProjectID); ok {
+				executionContext.ExecutionRunnerID = runner.ID
+			}
+		default:
+			if e.cloudPoolServesProject(executionContext.ProjectID) {
+				executionContext.ExecutionPool = domain.ExecutionModeCloud
+				if runner, ok := e.cloudPoolRunner(executionContext.ProjectID); ok {
+					executionContext.ExecutionRunnerID = runner.ID
+				}
+			} else {
+				executionContext.ExecutionRunnerID = e.repo.DefaultRunner(executionContext.ResponsibleUserID)
+			}
+		}
 	}
 	if executionContext.ExecutionRunnerID == "" && !executionContext.ExecutionPinned {
 		if runner, ok := e.cloudPoolRunner(executionContext.ProjectID); ok {
@@ -213,4 +277,13 @@ func (e *Engine) executes() bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	return e.executeRuns && !e.draining
+}
+
+func firstRepositoryBase(repos []domain.RepositoryContext) string {
+	for _, r := range repos {
+		if strings.TrimSpace(r.BaseBranch) != "" {
+			return r.BaseBranch
+		}
+	}
+	return "master"
 }
