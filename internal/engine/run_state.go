@@ -62,7 +62,7 @@ func (e *Engine) updateRunAtErr(id string, allowExpiredLease bool, mutate func(*
 				if current, ok := e.repo.RunStreamView(id); ok {
 					e.publishRun(current)
 				}
-				return true
+				return true, nil
 			} else {
 				log.Printf("put run %s retry after shrink: %v", id, retry)
 			}

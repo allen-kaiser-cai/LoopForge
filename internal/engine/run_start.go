@@ -181,8 +181,7 @@ func (e *Engine) startWorkflowDefinition(wf domain.WorkflowDefinition, input str
 	}
 	executionContext.RunID, executionContext.TraceID, executionContext.WorkflowID, executionContext.WorkflowVersion = id, id, workflowID, wf.Version
 	if executionContext.ParentRunID == "" && !executionContext.ExecutionPinned {
-		executionContext.ExecutionRunnerID = e.repo.DefaultRunner(executionContext.ResponsibleUserID)
-	if executionContext.ParentRunID == "" {
+		executionContext.WorkspaceRunID = ""
 		executionContext.WorkspaceRunID = ""
 		// 执行目标按流程配置决定：
 		// - personal：人机协同流程，固定落在责任人自己的电脑上；
