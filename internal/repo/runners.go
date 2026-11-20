@@ -543,7 +543,10 @@ func (r *RunnersRepo) ClaimRunnerTask(runnerID string, providers []string, now t
 	var found bool
 	err := r.DB.Transaction(func(tx *gorm.DB) error {
 		var rows []runnerTaskRow
+		// 只取排序/领取所需的窄列：payload 里带着整份任务提示词（可能上百 KB），
+		// 把 payload 一起读进来会撑爆 MySQL 的 sort buffer（Error 1038）。
 		if err := r.locking(tx).
+			Select("id", "created_at", "attempt").
 			Where("status = ? AND (runner_id = '' OR runner_id = ?) AND provider IN ?", domain.RunnerTaskQueued, runnerID, allowed).
 			Order("created_at").Limit(1).
 			Find(&rows).Error; err != nil {
@@ -730,8 +733,35 @@ func (r *RunnersRepo) ExpireRunnerTasks(now time.Time) ([]domain.RunnerTask, err
 			Find(&rows).Error; err != nil {
 			return err
 		}
+		// 宽限：如果租约拥有者的执行机刚刚还有心跳，说明进程还活着，
+		// 只是一次续约没赶上（长任务/网络抖动），本轮先不回收，避免误杀。
+		onlineOwners := map[string]bool{}
+		owners := make([]string, 0, len(rows))
+		for _, row := range rows {
+			if owner := strings.TrimSpace(row.LeaseOwner); owner != "" {
+				owners = append(owners, owner)
+			}
+		}
+		if len(owners) > 0 {
+			type runnerSeen struct {
+				ID         string
+				LastSeenAt *time.Time
+			}
+			var seenRows []runnerSeen
+			if err := tx.Table("runners").Select("id, last_seen_at").Where("id IN ?", owners).Scan(&seenRows).Error; err == nil {
+				grace := now.Add(-2 * time.Minute)
+				for _, r := range seenRows {
+					if r.LastSeenAt != nil && r.LastSeenAt.After(grace) {
+						onlineOwners[r.ID] = true
+					}
+				}
+			}
+		}
 		for _, row := range rows {
 			task := runnerTaskFromRow(row)
+			if onlineOwners[strings.TrimSpace(task.LeaseOwner)] {
+				continue
+			}
 			if task.Attempt < task.MaxAttempts {
 				task.Status = domain.RunnerTaskQueued
 			} else {

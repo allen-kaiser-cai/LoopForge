@@ -184,7 +184,7 @@ func (h *assistantHandlers) handleBotCardAction(ctx context.Context, bot domain.
 	note := "企业微信操作，平台账号：" + user.LoginName + "，发送者：" + item.SenderID
 	switch item.Action {
 	case "approve":
-		err = h.engine.Approve(delivery.RunID, delivery.NodeID, note, expected)
+		err = h.engine.Approve(delivery.RunID, delivery.NodeID, note, engine.ApprovalActor{}, expected)
 	case "retry":
 		err = h.engine.Retry(delivery.RunID, delivery.NodeID, note, note, expected)
 	case "pass":
@@ -194,7 +194,7 @@ func (h *assistantHandlers) handleBotCardAction(ctx context.Context, bot domain.
 	case "resume":
 		err = h.engine.ResumePaused(delivery.RunID, note, expected)
 	case "reject":
-		err = h.engine.Reject(delivery.RunID, domain.RejectRequest{NodeID: delivery.NodeID, Reason: note}, expected)
+		err = h.engine.Reject(delivery.RunID, domain.RejectRequest{NodeID: delivery.NodeID, Reason: note}, engine.ApprovalActor{}, expected)
 	default:
 		return "此按钮已处理，请查看最新消息。", nil
 	}

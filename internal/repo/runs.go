@@ -357,7 +357,8 @@ func (r *RunsRepo) RunView(id string) (domain.Run, bool) {
 	}
 	timing := domain.ComputeRunTiming(run, events[run.ID], time.Now().UTC())
 	run.Timing = &timing
-	if run.WorkflowSnapshot.CollaborationMode == "group" {
+	// 运行事件对所有模式都加载：驳回/批准等审计信息要靠它展示。
+	{
 		var rows []runEventRow
 		if err := r.DB.Where("run_id = ?", id).Order("seq DESC").Limit(80).Find(&rows).Error; err != nil {
 			return domain.Run{}, false

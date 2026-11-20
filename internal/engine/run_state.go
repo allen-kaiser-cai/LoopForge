@@ -54,6 +54,19 @@ func (e *Engine) updateRunAtErr(id string, allowExpiredLease bool, mutate func(*
 		mutate(&r)
 	}
 	if err := e.repo.PutRun(r); err != nil {
+		// 常见失败是单个产物超过列上限（Data too long）。先裁掉超限内容再重试一次，
+		// 避免一次写失败把整条运行永久卡在 running。
+		if shrinkOversizedArtifacts(&r) {
+			if retry := e.repo.PutRun(r); retry == nil {
+				log.Printf("put run %s: recovered after shrinking oversized artifacts (first error: %v)", id, err)
+				if current, ok := e.repo.RunStreamView(id); ok {
+					e.publishRun(current)
+				}
+				return true
+			} else {
+				log.Printf("put run %s retry after shrink: %v", id, retry)
+			}
+		}
 		log.Printf("put run %s: %v", id, err)
 		return false, err
 	}
@@ -176,4 +189,24 @@ func (e *Engine) publishRun(current domain.Run) {
 			}
 		}
 	}
+}
+
+// shrinkOversizedArtifacts 把超过数据库列安全上限的产物内容截断，返回是否有改动。
+// 仅用于持久化失败后的兜底重试，正常路径由产物契约校验与 appendArtifact 控制大小。
+func shrinkOversizedArtifacts(r *domain.Run) bool {
+	const safeLimit = 60000
+	changed := false
+	for i := range r.Artifacts {
+		if len(r.Artifacts[i].Content) <= safeLimit {
+			continue
+		}
+		note := "\n\n> 产物超过单次保存上限，已截断；完整内容请查看运行工作区。\n"
+		keep := safeLimit - len(note)
+		if keep < 0 {
+			keep = 0
+		}
+		r.Artifacts[i].Content = r.Artifacts[i].Content[:keep] + note
+		changed = true
+	}
+	return changed
 }
