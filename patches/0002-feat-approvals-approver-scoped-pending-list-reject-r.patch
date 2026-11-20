@@ -1,0 +1,470 @@
+From eaf12f424c1fbe9824124099a2979c87314ac850 Mon Sep 17 00:00:00 2001
+From: caiyihua <caiyihua@wcansoft.com>
+Date: Fri, 20 Nov 2026 11:55:06 +0800
+Subject: [PATCH 2/5] feat(approvals): approver-scoped pending list, reject
+ records and visible run events
+
+---
+ internal/domain/run.go        |  8 +++
+ internal/engine/run_ops.go    | 94 +++++++++++++++++++++++++++++++++--
+ internal/httpapi/approvals.go | 90 +++++++++++++++++++++++++++++++++
+ internal/httpapi/runs.go      | 88 ++++++++++++++++++++++++++++++--
+ internal/httpapi/server.go    |  1 +
+ web/app/approvals.js          |  3 +-
+ web/app/runs.js               | 14 +++++-
+ 7 files changed, 289 insertions(+), 9 deletions(-)
+ create mode 100644 internal/httpapi/approvals.go
+
+diff --git a/internal/domain/run.go b/internal/domain/run.go
+index 2a9ddce..1997385 100644
+--- a/internal/domain/run.go
++++ b/internal/domain/run.go
+@@ -47,6 +47,11 @@ type Run struct {
+ 	Usage             TokenUsage          `json:"usage"`
+ 	ToolCalls         int                 `json:"toolCalls"`
+ 	Artifacts         []Artifact          `json:"artifacts,omitempty"`
++	// WaitingApproverIDs 是当前待审批节点配置的审批人用户 ID（仅 waiting 运行填充，前端按人过滤用）。
++	WaitingNodeID        string  `json:"waitingNodeId,omitempty"`
++	WaitingNodeName      string  `json:"waitingNodeName,omitempty"`
++	WaitingApproverLabel string  `json:"waitingApproverLabel,omitempty"`
++	WaitingApproverIDs   []int64 `json:"waitingApproverIds,omitempty"`
+ 	ArtifactCount     int                 `json:"artifactCount,omitempty"`
+ 	HumanContext      string              `json:"humanContext,omitempty"`
+ 	Timing            *RunTiming          `json:"timing,omitempty"`
+@@ -179,6 +184,9 @@ type TokenUsage struct {
+ 	// CostStatus 区分"成本为 0"与"成本未知"：reported（适配器上报）、estimated（按 token 估算）、
+ 	// unknown（未识别，展示为"未识别"而不是 ¥0）。空值视为 unknown，旧数据向后兼容。
+ 	CostStatus string `json:"costStatus,omitempty"`
++	// ReportedCostUSD 是适配器上报的金额（CLI 自带价目表，可能与模型真实价格不符）。
++	// CostUSD 在展示层按平台价目表重算，这里保留原始值用于对账。
++	ReportedCostUSD float64 `json:"reportedCostUsd,omitempty"`
+ }
+ 
+ type TelemetryEvent struct {
+diff --git a/internal/engine/run_ops.go b/internal/engine/run_ops.go
+index c082f1b..a650f5c 100644
+--- a/internal/engine/run_ops.go
++++ b/internal/engine/run_ops.go
+@@ -137,7 +137,46 @@ func (e *Engine) Pause(runID string) error {
+ 	return nil
+ }
+ 
+-func (e *Engine) Approve(runID, nodeID, humanContext string, expected ...NodeExpectation) error {
++// ApprovalActor 是发起审批决定的登录用户；Login 为空表示非登录来源（机器人或内部调用）。
++type ApprovalActor struct {
++	Login string
++	Name  string
++	Admin bool
++}
++
++// ensureApprovalAllowed 校验当前审批人是否有权处理该节点。
++func ensureApprovalAllowed(r domain.Run, nodeID string, actor ApprovalActor) error {
++	var approvers []string
++	var label string
++	for _, n := range r.WorkflowSnapshot.Nodes {
++		if n.ID == nodeID {
++			approvers = n.Approvers
++			label = n.ApproverLabel
++			break
++		}
++	}
++	if len(approvers) == 0 {
++		return nil
++	}
++	who := label
++	if who == "" {
++		who = strings.Join(approvers, "、")
++	}
++	if actor.Login == "" {
++		return fmt.Errorf("该节点需指定审批人（%s），请以被指定账号登录或使用其访问密钥操作", who)
++	}
++	if actor.Admin {
++		return nil
++	}
++	for _, want := range approvers {
++		if strings.EqualFold(strings.TrimSpace(want), actor.Login) {
++			return nil
++		}
++	}
++	return fmt.Errorf("当前账号 %s 不在该节点的审批人名单（%s）", actor.Login, who)
++}
++
++func (e *Engine) Approve(runID, nodeID, humanContext string, actor ApprovalActor, expected ...NodeExpectation) error {
+ 	e.stateMu.Lock()
+ 	defer e.stateMu.Unlock()
+ 	r, ok := e.repo.RunState(runID)
+@@ -164,10 +203,22 @@ func (e *Engine) Approve(runID, nodeID, humanContext string, expected ...NodeExp
+ 	if n == nil || n.Status != "waiting_approval" {
+ 		return fmt.Errorf("node is not waiting for approval")
+ 	}
++	if err := ensureApprovalAllowed(r, nodeID, actor); err != nil {
++		return err
++	}
+ 	n.Status = "succeeded"
+ 	n.FinishedAt = time.Now().UTC()
++	approver := actor.Login
++	if approver == "" {
++		approver = "未记录登录账号"
++	} else if actor.Name != "" {
++		approver = actor.Login + "（" + actor.Name + "）"
++	}
++	if actor.Admin {
++		approver += "，管理员越过"
++	}
+ 	note := recordHumanContext(&r, nodeID, "人工批准继续", humanContext)
+-	decision := "# Approval\n\nApproved by a human gate.\n"
++	decision := "# Approval\n\nApproved by a human gate.\n\n- 审批人：" + approver + "\n- 时间：" + time.Now().UTC().Format(time.RFC3339) + "\n"
+ 	if note != "" {
+ 		decision += "\n" + note + "\n"
+ 	}
+@@ -268,7 +319,7 @@ func (e *Engine) pass(runID, nodeID, humanContext string, expected ...NodeExpect
+ 	return e.persistControlDecision(runID, r, expected...)
+ }
+ 
+-func (e *Engine) Reject(runID string, req domain.RejectRequest, expected ...NodeExpectation) error {
++func (e *Engine) Reject(runID string, req domain.RejectRequest, actor ApprovalActor, expected ...NodeExpectation) error {
+ 	e.stateMu.Lock()
+ 	defer e.stateMu.Unlock()
+ 	r, ok := e.repo.RunState(runID)
+@@ -288,6 +339,9 @@ func (e *Engine) Reject(runID string, req domain.RejectRequest, expected ...Node
+ 	if err := checkNodeExpectation(r, expected); err != nil {
+ 		return err
+ 	}
++	if err := ensureApprovalAllowed(r, req.NodeID, actor); err != nil {
++		return err
++	}
+ 	if err := forbidClosedGongfengIssue(e.repo, r); err != nil {
+ 		return err
+ 	}
+@@ -339,6 +393,40 @@ func (e *Engine) Reject(runID string, req domain.RejectRequest, expected ...Node
+ 			}
+ 		}
+ 	}
++	// 驳回留痕：把这次打回写成不可变产物，审批人和后续重跑都能查。
++	gateName, targetName := req.NodeID, target
++	for _, n := range wf.Nodes {
++		if n.ID == req.NodeID {
++			gateName = n.Name
++		}
++		if n.ID == target {
++			targetName = n.Name
++		}
++	}
++	actorLabel := strings.TrimSpace(actor.Name)
++	if actorLabel == "" {
++		actorLabel = strings.TrimSpace(actor.Login)
++	}
++	if actorLabel == "" {
++		actorLabel = "系统"
++	}
++	override := ""
++	if actor.Admin {
++		override = "（管理员越过审批人名单）"
++	}
++	targetNode := r.Nodes[target]
++	reworkCount := 0
++	if targetNode != nil {
++		reworkCount = targetNode.ReworkCount
++	}
++	record := fmt.Sprintf("# 驳回记录\n\n| 项 | 内容 |\n| --- | --- |\n| 驳回节点 | %s（%s） |\n| 打回目标 | %s（%s） |\n| 驳回人 | %s%s |\n| 时间 | %s |\n| 目标节点返工次数 | %d |\n\n## 驳回原因\n\n%s\n\n## 人工补充上下文\n\n%s\n",
++		gateName, req.NodeID, targetName, target, actorLabel, override,
++		time.Now().UTC().Format(time.RFC3339), reworkCount, req.Reason, req.Context)
++	gateAttempt := 0
++	if gate := r.Nodes[req.NodeID]; gate != nil {
++		gateAttempt = gate.Attempt
++	}
++	appendArtifact(&r, req.NodeID, gateAttempt, "reject-record", "reject-record.md", "text/markdown", []byte(record))
+ 	e.event(&r, req.NodeID, "gate.rejected", fmt.Sprintf("打回到 %s：%s", target, req.Reason))
+ 	appendControlTelemetry(&r, req.NodeID, "gate.rejected", fmt.Sprintf("打回到 %s：%s", target, req.Reason))
+ 	r.Status = "running"
+diff --git a/internal/httpapi/approvals.go b/internal/httpapi/approvals.go
+new file mode 100644
+index 0000000..e4afe69
+--- /dev/null
++++ b/internal/httpapi/approvals.go
+@@ -0,0 +1,90 @@
++package httpapi
++
++import (
++	"net/http"
++	"strings"
++	"time"
++
++	"github.com/gin-gonic/gin"
++
++	"agentflow/internal/domain"
++)
++
++// pendingApprovals 只返回当前登录账号有权处理的待审批节点。
++// 平台管理员会看到全部待审批项，并带 adminBypass 标记，便于应急时定位。
++func (h *runsHandlers) pendingApprovals(c *gin.Context) {
++	user, ok := h.requestUser(c.Request, true)
++	if !ok || user == nil {
++		c.JSON(http.StatusUnauthorized, gin.H{"error": "请先登录"})
++		return
++	}
++	filter := domain.AnalyticsFilter{ProjectID: c.Query("projectId")}
++	summaries, err := h.repo.RunSummariesFor(filter, "")
++	if err != nil {
++		respond(c, err)
++		return
++	}
++	out := make([]gin.H, 0, 8)
++	for _, summary := range summaries {
++		if summary.Status != "waiting" {
++			continue
++		}
++		view, exists := h.repo.RunView(summary.ID)
++		if !exists {
++			continue
++		}
++		nodeID := ""
++		nodeStatus := time.Time{}
++		for id, node := range view.Nodes {
++			if node != nil && node.Status == "waiting_approval" {
++				nodeID = id
++				nodeStatus = node.StartedAt
++				break
++			}
++		}
++		if nodeID == "" {
++			continue
++		}
++		var node domain.WorkflowNode
++		for _, n := range view.WorkflowSnapshot.Nodes {
++			if n.ID == nodeID {
++				node = n
++				break
++			}
++		}
++		allowed := len(node.Approvers) == 0 || user.IsPlatformAdmin
++		if !allowed {
++			for _, want := range node.Approvers {
++				if strings.EqualFold(strings.TrimSpace(want), user.LoginName) {
++					allowed = true
++					break
++				}
++			}
++		}
++		if !allowed {
++			continue
++		}
++		out = append(out, gin.H{
++			"runId":         view.ID,
++			"projectId":     view.ExecutionContext.ProjectID,
++			"workflowId":    view.WorkflowID,
++			"nodeId":        nodeID,
++			"nodeName":      node.Name,
++			"approverLabel": node.ApproverLabel,
++			"approvers":     node.Approvers,
++			"adminBypass":   user.IsPlatformAdmin && !containsLogin(node.Approvers, user.LoginName),
++			"waitingSince":  nodeStatus,
++			"createdAt":     view.CreatedAt,
++		})
++	}
++	c.JSON(http.StatusOK, out)
++}
++
++func containsLogin(list []string, login string) bool {
++	for _, item := range list {
++		if strings.EqualFold(strings.TrimSpace(item), login) {
++			return true
++		}
++	}
++	return false
++}
+diff --git a/internal/httpapi/runs.go b/internal/httpapi/runs.go
+index 7e58bdd..26d9fd7 100644
+--- a/internal/httpapi/runs.go
++++ b/internal/httpapi/runs.go
+@@ -85,7 +85,7 @@ func (h *runsHandlers) runs(c *gin.Context) {
+ 			respond(c, err)
+ 			return
+ 		}
+-		c.JSON(200, runSummaries(runs))
++		c.JSON(200, h.enrichWaitingApprovers(runSummaries(runs)))
+ 		return
+ 	}
+ 	if r.Method == http.MethodPost {
+@@ -258,7 +258,7 @@ func (h *runsHandlers) run(c *gin.Context) {
+ 			if rejectBlockedIssueRun(h.deps, c, id) {
+ 				return
+ 			}
+-			respond(c, h.engine.Approve(id, req.NodeID, req.Context, decisionExpectation(req.NodeID, req.Expected)...))
++			respond(c, h.engine.Approve(id, req.NodeID, req.Context, approvalActor(c, h.deps), decisionExpectation(req.NodeID, req.Expected)...))
+ 		}
+ 	case "/api/runs/:id/reject":
+ 		var req domain.RejectRequest
+@@ -266,7 +266,7 @@ func (h *runsHandlers) run(c *gin.Context) {
+ 			if rejectBlockedIssueRun(h.deps, c, id) {
+ 				return
+ 			}
+-			respond(c, h.engine.Reject(id, req, decisionExpectation(req.NodeID, req.Expected)...))
++			respond(c, h.engine.Reject(id, req, approvalActor(c, h.deps), decisionExpectation(req.NodeID, req.Expected)...))
+ 		}
+ 	case "/api/runs/:id/retry":
+ 		var req domain.HumanDecision
+@@ -344,6 +344,7 @@ func publicRun(run domain.Run, summary bool) domain.Run {
+ 	if summary {
+ 		run.Artifacts = nil
+ 	}
++	applyUsagePricing(&run)
+ 	run.Artifacts = append([]domain.Artifact(nil), run.Artifacts...)
+ 	for i := range run.Artifacts {
+ 		run.Artifacts[i].Content = ""
+@@ -499,9 +500,90 @@ func clipRunText(value string, n int) string {
+ 	return value[:n] + "…"
+ }
+ 
++// approvalActor 从请求上下文解析当前登录用户，用于审批人校验与审计记录。
++func approvalActor(c *gin.Context, d *deps) engine.ApprovalActor {
++	actor := engine.ApprovalActor{}
++	if u, ok := d.requestUser(c.Request, true); ok && u != nil {
++		actor.Login = u.LoginName
++		actor.Name = u.ChineseName
++		actor.Admin = u.IsPlatformAdmin
++	}
++	return actor
++}
++
+ func decisionExpectation(nodeID string, expected *domain.NodeDecisionExpectation) []engine.NodeExpectation {
+ 	if expected == nil {
+ 		return nil
+ 	}
+ 	return []engine.NodeExpectation{{NodeID: nodeID, Status: expected.Status, Attempt: expected.Attempt, ReworkCount: expected.ReworkCount}}
+ }
++
++// enrichWaitingApprovers 给等待审批的运行摘要补上待审节点与审批人用户 ID，
++// 让「待我确认」可以按人过滤（审批人名单存的是登录名，这里转换成用户 ID）。
++func (h *runsHandlers) enrichWaitingApprovers(runs []domain.Run) []domain.Run {
++	for i := range runs {
++		if runs[i].Status != "waiting" {
++			continue
++		}
++		view, ok := h.repo.RunView(runs[i].ID)
++		if !ok {
++			continue
++		}
++		nodeID := ""
++		for id, node := range view.Nodes {
++			if node != nil && node.Status == "waiting_approval" {
++				nodeID = id
++				break
++			}
++		}
++		if nodeID == "" {
++			continue
++		}
++		for _, node := range view.WorkflowSnapshot.Nodes {
++			if node.ID != nodeID {
++				continue
++			}
++			runs[i].WaitingNodeID = node.ID
++			runs[i].WaitingNodeName = node.Name
++			runs[i].WaitingApproverLabel = node.ApproverLabel
++			for _, login := range node.Approvers {
++				if user, found := h.repo.UserByLoginName(strings.TrimSpace(login)); found {
++					runs[i].WaitingApproverIDs = append(runs[i].WaitingApproverIDs, user.ID)
++				}
++			}
++			break
++		}
++	}
++	return runs
++}
++
++// applyUsagePricing 用平台价目表重算成本，避免 CLI 上报的 Anthropic 价格
++// 污染百炼/DeepSeek 等模型；原始上报值保留在 ReportedCostUSD 里供对账。
++func applyUsagePricing(run *domain.Run) {
++	anyNode, allPriced, total := false, true, 0.0
++	for _, node := range run.Nodes {
++		if node == nil {
++			continue
++		}
++		u := node.Usage
++		if u.InputTokens+u.OutputTokens+u.CacheReadTokens+u.CacheWriteTokens == 0 {
++			continue
++		}
++		anyNode = true
++		est := domain.AnalyticsPricedUsage(node.Model, u, false)
++		if est.CostStatus != "estimated" || est.CostUSD == 0 && u.CostUSD > 0 {
++			allPriced = false
++			continue
++		}
++		u.ReportedCostUSD = u.CostUSD
++		u.CostUSD = est.CostUSD
++		u.CostStatus = "estimated"
++		node.Usage = u
++		total += est.CostUSD
++	}
++	if anyNode && allPriced && run.Usage.CostStatus == "reported" {
++		run.Usage.ReportedCostUSD = run.Usage.CostUSD
++		run.Usage.CostUSD = total
++		run.Usage.CostStatus = "estimated"
++	}
++}
+diff --git a/internal/httpapi/server.go b/internal/httpapi/server.go
+index 8c6677c..acd2d33 100644
+--- a/internal/httpapi/server.go
++++ b/internal/httpapi/server.go
+@@ -506,6 +506,7 @@ func newWithNotifications(s *repo.Store, e *engine.Engine, syncSvc *tracker.Serv
+ 
+ 	// --- runs ---
+ 	g.GET("/api/runs", api.runs.runs)
++	g.GET("/api/approvals", api.runs.pendingApprovals)
+ 	g.POST("/api/runs", api.runs.runs)
+ 	g.GET("/api/runs/:id", api.runs.run)
+ 	g.DELETE("/api/runs/:id", api.runs.run)
+diff --git a/web/app/approvals.js b/web/app/approvals.js
+index ec655c7..6402427 100644
+--- a/web/app/approvals.js
++++ b/web/app/approvals.js
+@@ -342,7 +342,8 @@ function approvalItems(){
+   // 登录用户只看分派给自己的流程；responsibleUserId 为 0 的历史/无主流程对所有人可见，
+   // 避免升级后旧数据被藏没（可用新增的「取消流程」清理）。
+   if(!uid)return waiting;
+-  return waiting.filter(r=>{const rid=Number(r.executionContext?.responsibleUserId||0);return rid===0||rid===uid});
++  // 责任人之外，节点审批人（waitingApproverIds）也应看到该待办。
++  return waiting.filter(r=>{const rid=Number(r.executionContext?.responsibleUserId||0);if(rid===0||rid===uid)return true;const ids=Array.isArray(r.waitingApproverIds)?r.waitingApproverIds.map(Number):[];return ids.includes(uid)});
+ }
+ // /api/bootstrap 不带 runs，首屏单独拉一次，否则徽标要等进了「待我确认」才出现。
+ async function preloadApprovalBadge(){try{const runs=await api('/api/runs',{silent:true});if(Array.isArray(runs)){state.data.runs=runs;updateApprovalBadge()}}catch{}}
+diff --git a/web/app/runs.js b/web/app/runs.js
+index 9b6895e..f79434a 100644
+--- a/web/app/runs.js
++++ b/web/app/runs.js
+@@ -442,7 +442,7 @@ function bindRunScrollLocks(host,runId,nodeId){
+ }
+ function liveUsageHTML(r){
+   const usage=r.usage||{};
+-  return `<span>资源消耗</span><b>${formatTokens(usage.totalTokens)} tokens · ${r.toolCalls||0} tools</b><small>${formatTokens(usage.inputTokens)} 输入 / ${formatTokens(usage.outputTokens)} 输出 · cache ${formatTokens(usage.cacheReadTokens)} 命中 / ${formatTokens(usage.cacheWriteTokens)} 写入 · $${Number(usage.costUsd||0).toFixed(4)}</small><small class="usage-source">实时 stream-json · Hook / OTEL 只进轨迹</small>`;
++  return `<span>资源消耗</span><b>${formatTokens(usage.totalTokens)} tokens · ${r.toolCalls||0} tools</b><small>${formatTokens(usage.inputTokens)} 输入 / ${formatTokens(usage.outputTokens)} 输出 · cache ${formatTokens(usage.cacheReadTokens)} 命中 / ${formatTokens(usage.cacheWriteTokens)} 写入 · $${Number(usage.costUsd||0).toFixed(4)}${(Number(usage.reportedCostUsd||0)>0&&Math.abs(Number(usage.reportedCostUsd||0)-Number(usage.costUsd||0))>0.01)?`（模型上报 $${Number(usage.reportedCostUsd).toFixed(4)}，按平台价目表重算）`:''}</small><small class="usage-source">实时 stream-json · Hook / OTEL 只进轨迹</small>`;
+ }
+ function gateResultCardHTML(nr){
+   const gate=nr?.gateResult;
+@@ -1125,7 +1125,7 @@ function renderRunDetail(r){
+   const runTabs=['overview:概览','trace:实时轨迹','logs:Worker日志','workspace:工作区'];
+   if(previewEnabled)runTabs.push('preview:前端预览');
+   runTabs.push('eval:智能评测');
+-  host.innerHTML=`<div class="run-detail-main"><header class="run-detail-header"><div class="run-detail-topbar"><button class="button ghost small run-back-inline" data-run-back>← 返回运行列表</button><div class="run-breadcrumb"><span>${issueRef}</span><i>›</i><span>${escapeHTML(wf.name)}</span></div>${r.executionContext?.parentRunId?`<button class="button ghost small" data-open-parent-run="${escapeHTML(r.executionContext.parentRunId)}">↑ 返回父 SOP 运行</button>`:''}<div class="run-header-actions">${issueId?`<button class="button primary small" data-open-issue="${escapeHTML(issueId)}">打开需求</button>`:''}${!r.pauseRequested?refreshRunSOPButtonHTML(r):''}<button class="button ghost small" data-open-flow>查看流程定义</button>${['queued','running','waiting'].includes(r.status)?'<button class="button danger-outline small" data-cancel-run>取消运行</button>':'<button class="button danger-outline small" data-delete-run>删除记录</button>'}</div></div><div class="run-header-main"><div><h2>${escapeHTML(ctx.issue?.title||wf.name)}</h2><p>${escapeHTML(r.input||'无运行输入')}</p></div><div class="run-status-wrap"><span class="status ${runDisplayStatusClass(r)}">${runDisplayStatus(r)}</span>${r.status==='failed'&&!gongfengIssueClosed(ctx.issue)?'<button class="button primary small" data-resume-run>↻ 重试运行</button>':''}${canManuallyPassFailedNode(r)&&!gongfengIssueClosed(ctx.issue)?`<button class="button ghost small" data-pass-node="${escapeHTML(r.id)}" data-node="${escapeHTML(failedNodeId(r))}">手动通过</button>`:''}</div></div><div class="run-header-meta"><span class="run-meta-chip run-id-chip" title="${escapeHTML(r.id)}">Run <code>${escapeHTML(r.id.slice(-12))}</code><button type="button" class="run-id-copy" data-copy-run title="复制完整 Run ID" aria-label="复制 Run ID"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 5.5V3.5A1.5 1.5 0 0 0 9 2H3.5A1.5 1.5 0 0 0 2 3.5V9A1.5 1.5 0 0 0 3.5 10.5H5.5"/></svg></button></span>${runModeChipHTML(r,wf)}${runExecutionChipHTML(r)}<span class="run-meta-chip"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-1px;margin-right:4px;"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>启动于 ${new Date(r.createdAt).toLocaleString()}</span><span class="run-meta-chip" title="${escapeHTML(runTimingTitle(r))}"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-1px;margin-right:4px;"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>执行 ${runElapsed(r)}${runWallNote(r)}</span></div></header><div class="run-section-label"><b>执行详情</b><div class="run-section-label-actions"><button class="button ghost small" data-export-logs title="下载本次运行全部节点的 Worker 日志">导出全部日志</button><div class="run-tabs" role="tablist">${runTabs.map(t=>{const[k,label]=t.split(':');return `<button class="run-tab ${runDetailTab===k?'active':''}" data-run-tab="${k}">${label}</button>`}).join('')}</div></div></div><div class="run-pane" data-run-pane="overview" ${runDetailTab==='overview'?'':'hidden'}><section class="run-context-grid">${runProgressCellHTML(r,wf,progress,graphNodes)}<div data-run-usage>${liveUsageHTML(r)}</div><div><span>交付物</span><b>${(r.artifacts||[]).length} 个不可变快照</b><small>按节点和尝试次数保留版本</small></div></section></section>${alignPanelHTML}${runIsGroupMode(r)?`<details class="run-sop-snapshot"><summary><div><b>已冷冻 SOP 快照</b><span>历史协作 · ${graphNodes.length} 个节点可展开审计</span></div></summary>`:''}<section class="run-graph-section"><div class="section-heading"><div><h3>节点执行拓扑</h3><span>点击节点查看该节点的输出、产物和执行事件</span></div><div class="graph-legend"><span><i class="succeeded"></i>完成</span><span><i class="running"></i>运行中</span><span><i class="waiting_approval"></i>待审批</span><span><i></i>未开始</span></div></div><div class="run-graph">${graphNodes.map((n,index)=>{const gv=graphNodeView(r,n.id),meta=nodeMeta(n),arts=(r.artifacts||[]).filter(a=>a.nodeId===n.id).length;return `${index?'<span class="graph-arrow">→</span>':''}<button class="graph-node ${gv.cls} ${state.selectedRunNode===n.id?'selected':''}" data-run-node="${escapeHTML(n.id)}"><span class="node-icon ${meta.kind}">${runNodeIcon(meta.kind)}</span><div><b>${escapeHTML(n.name)}</b><small>${escapeHTML(gv.text)}</small></div>${arts?`<em>${arts} 产物</em>`:''}</button>`}).join('')}</div></section><div class="node-drilldown"><section class="node-inspector"><div class="section-heading"><div class="node-inspector-title"><h3>${escapeHTML(selected?.name||'节点详情')}</h3><span class="node-activity-inline${inspectorRunning?' is-running':''}" ${nr.activity?'':'hidden'}>当前活动：<b>${escapeHTML(nr.activity||'')}</b></span><span class="node-inspector-model">${escapeHTML(nr.provider||'未分配')}${nr.model?` · ${escapeHTML(nr.model)}`:''}</span></div><span class="status node-inspector-status ${nr.status||'pending'}${inspectorRunning?' is-running':''}">${statusText(nr.status)||'待执行'}</span></div><div class="node-facts"><div><span>执行次数</span><b>${nr.attempt||0}</b></div><div><span>返工</span><b>${nr.reworkCount||0}</b></div><div><span>Token</span><b>${formatTokens(nr.usage?.totalTokens)}</b></div><div><span>工具调用</span><b>${nr.toolCalls||0}</b></div></div>${childSOPPanelHTML(r,selected?.id)}${gateResultCardHTML(nr)}${canRerunFromHere(r,selected?.id)?`<div class="node-rerun-row"><button type="button" class="button ghost small" data-rerun-from-here="${escapeHTML(selected.id)}">从这里重跑</button><small>保留上游结果，从本节点及下游重跑</small></div>`:''}${nr.output?`<div class="node-output"><div><b>节点输出</b><button data-copy-output>复制</button></div><pre>${escapeHTML(displayNodeOutput(nr.output))}</pre></div>`:'<div class="node-output empty"><b>节点输出</b><p>节点完成后，结构化输出会显示在这里。</p></div>'}<div class="runtime-details"><span>Sandbox <code>${escapeHTML(nr.sandboxId||'—')}</code></span><span>Session <code>${escapeHTML(nr.sessionId||'—')}</code></span></div></section><section class="node-artifacts"><div class="section-heading"><div><h3>节点交付物</h3><span>${nodeArtifacts.length} 个版本</span></div></div><div class="node-artifact-list">${nodeArtifacts.map(a=>`<button class="node-artifact-card" data-artifact="${escapeHTML(a.id)}"><span class="artifact-file-icon">${a.mediaType==='application/json'?'{}':'MD'}</span><div><b>${escapeHTML(a.name)}</b><span>${escapeHTML(a.path)}</span><small>attempt ${a.attempt} · ${Math.max(1,Math.ceil((a.size||0)/1024))} KB · ${(a.sha256||'').slice(0,10)}</small></div><i>预览 ›</i></button>`).join('')||'<div class="empty-inline"><span>◇</span><p>此节点还没有登记交付物</p></div>'}</div></section></div>${runIsGroupMode(r)?'</details>':''}</div><div class="run-pane" data-run-pane="trace" ${runDetailTab==='trace'?'':'hidden'}><section class="trace-section"><div class="section-heading"><div><h3>${telemetrySectionTitle(telAdapter)}</h3><span>${telPage?`${telemetry.length} 条已加载`:'加载最近 100 条'}</span></div><div class="trace-heading-actions">${telemetrySourceTabs(telAdapter,'data-tel-adapter')}${telPage?.hasMore?`<button class="button ghost small" data-tel-more>加载更早的 100 条</button>`:''}</div></div><div class="telemetry-feed">${telPage?([...telemetry].reverse().map(telemetryItemHTML).join('')||`<div class="empty-inline"><p>${telemetryEmptyHint(telAdapter)}</p></div>`):'<div class="empty-inline"><p>正在加载轨迹…</p></div>'}</div></section></div><div class="run-pane" data-run-pane="logs" ${runDetailTab==='logs'?'':'hidden'}><section class="worker-log-section"><div class="section-heading"><div><h3>Worker 日志</h3><span>${logPage?`${visibleWorkerLogs(logPage.items).length} 条调用`:(logBusy?'正在接收…':'实时加载最近调用')}</span></div><div class="worker-log-heading-actions">${logPage?.hasMore?`<button class="button ghost small" data-logs-more>加载更早的 100 条</button>`:''}</div></div><div class="worker-log-feed">${logPage?(visibleWorkerLogs(logPage.items).map(logLineHTML).join('')||'<div class="empty-inline"><p>该节点没有日志</p></div>'):'<div class="empty-inline"><p>正在加载 Worker 实时日志…</p></div>'}</div></section></div></div>`;  host.querySelector('.run-detail-main')?.insertAdjacentHTML('beforeend',`<div class="run-pane" data-run-pane="workspace" ${runDetailTab==='workspace'?'':'hidden'}>${workspacePaneHTML(r)}</div>${previewEnabled?`<div class="run-pane" data-run-pane="preview" ${runDetailTab==='preview'?'':'hidden'}>${previewPaneHTML(r)}</div>`:''}<div class="run-pane" data-run-pane="eval" ${runDetailTab==='eval'?'':'hidden'}>${runEvalPaneHTML(r)}</div>`);
++  host.innerHTML=`<div class="run-detail-main"><header class="run-detail-header"><div class="run-detail-topbar"><button class="button ghost small run-back-inline" data-run-back>← 返回运行列表</button><div class="run-breadcrumb"><span>${issueRef}</span><i>›</i><span>${escapeHTML(wf.name)}</span></div>${r.executionContext?.parentRunId?`<button class="button ghost small" data-open-parent-run="${escapeHTML(r.executionContext.parentRunId)}">↑ 返回父 SOP 运行</button>`:''}<div class="run-header-actions">${issueId?`<button class="button primary small" data-open-issue="${escapeHTML(issueId)}">打开需求</button>`:''}${!r.pauseRequested?refreshRunSOPButtonHTML(r):''}<button class="button ghost small" data-open-flow>查看流程定义</button>${['queued','running','waiting'].includes(r.status)?'<button class="button danger-outline small" data-cancel-run>取消运行</button>':'<button class="button danger-outline small" data-delete-run>删除记录</button>'}</div></div><div class="run-header-main"><div><h2>${escapeHTML(ctx.issue?.title||wf.name)}</h2><p>${escapeHTML(r.input||'无运行输入')}</p></div><div class="run-status-wrap"><span class="status ${runDisplayStatusClass(r)}">${runDisplayStatus(r)}</span>${r.status==='failed'&&!gongfengIssueClosed(ctx.issue)?'<button class="button primary small" data-resume-run>↻ 重试运行</button>':''}${canManuallyPassFailedNode(r)&&!gongfengIssueClosed(ctx.issue)?`<button class="button ghost small" data-pass-node="${escapeHTML(r.id)}" data-node="${escapeHTML(failedNodeId(r))}">手动通过</button>`:''}</div></div><div class="run-header-meta"><span class="run-meta-chip run-id-chip" title="${escapeHTML(r.id)}">Run <code>${escapeHTML(r.id.slice(-12))}</code><button type="button" class="run-id-copy" data-copy-run title="复制完整 Run ID" aria-label="复制 Run ID"><svg viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 5.5V3.5A1.5 1.5 0 0 0 9 2H3.5A1.5 1.5 0 0 0 2 3.5V9A1.5 1.5 0 0 0 3.5 10.5H5.5"/></svg></button></span>${runModeChipHTML(r,wf)}${runExecutionChipHTML(r)}<span class="run-meta-chip"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-1px;margin-right:4px;"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>启动于 ${new Date(r.createdAt).toLocaleString()}</span><span class="run-meta-chip" title="${escapeHTML(runTimingTitle(r))}"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" style="vertical-align:-1px;margin-right:4px;"><polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/></svg>执行 ${runElapsed(r)}${runWallNote(r)}</span></div></header><div class="run-section-label"><b>执行详情</b><div class="run-section-label-actions"><button class="button ghost small" data-export-logs title="下载本次运行全部节点的 Worker 日志">导出全部日志</button><div class="run-tabs" role="tablist">${runTabs.map(t=>{const[k,label]=t.split(':');return `<button class="run-tab ${runDetailTab===k?'active':''}" data-run-tab="${k}">${label}</button>`}).join('')}</div></div></div><div class="run-pane" data-run-pane="overview" ${runDetailTab==='overview'?'':'hidden'}><section class="run-context-grid">${runProgressCellHTML(r,wf,progress,graphNodes)}<div data-run-usage>${liveUsageHTML(r)}</div><div><span>交付物</span><b>${(r.artifacts||[]).length} 个不可变快照</b><small>按节点和尝试次数保留版本</small></div></section></section>${alignPanelHTML}${runIsGroupMode(r)?`<details class="run-sop-snapshot"><summary><div><b>已冷冻 SOP 快照</b><span>历史协作 · ${graphNodes.length} 个节点可展开审计</span></div></summary>`:''}<section class="run-graph-section"><div class="section-heading"><div><h3>节点执行拓扑</h3><span>点击节点查看该节点的输出、产物和执行事件</span></div><div class="graph-legend"><span><i class="succeeded"></i>完成</span><span><i class="running"></i>运行中</span><span><i class="waiting_approval"></i>待审批</span><span><i></i>未开始</span></div></div><div class="run-graph">${graphNodes.map((n,index)=>{const gv=graphNodeView(r,n.id),meta=nodeMeta(n),arts=(r.artifacts||[]).filter(a=>a.nodeId===n.id).length;return `${index?'<span class="graph-arrow">→</span>':''}<button class="graph-node ${gv.cls} ${state.selectedRunNode===n.id?'selected':''}" data-run-node="${escapeHTML(n.id)}"><span class="node-icon ${meta.kind}">${runNodeIcon(meta.kind)}</span><div><b>${escapeHTML(n.name)}</b><small>${escapeHTML(gv.text)}</small></div>${arts?`<em>${arts} 产物</em>`:''}</button>`}).join('')}</div></section><div class="node-drilldown"><section class="node-inspector"><div class="section-heading"><div class="node-inspector-title"><h3>${escapeHTML(selected?.name||'节点详情')}</h3><span class="node-activity-inline${inspectorRunning?' is-running':''}" ${nr.activity?'':'hidden'}>当前活动：<b>${escapeHTML(nr.activity||'')}</b></span><span class="node-inspector-model">${escapeHTML(nr.provider||'未分配')}${nr.model?` · ${escapeHTML(nr.model)}`:''}</span></div><span class="status node-inspector-status ${nr.status||'pending'}${inspectorRunning?' is-running':''}">${statusText(nr.status)||'待执行'}</span></div><div class="node-facts"><div><span>执行次数</span><b>${nr.attempt||0}</b></div><div><span>返工</span><b>${nr.reworkCount||0}</b></div><div><span>Token</span><b>${formatTokens(nr.usage?.totalTokens)}</b></div><div><span>工具调用</span><b>${nr.toolCalls||0}</b></div></div>${childSOPPanelHTML(r,selected?.id)}${gateResultCardHTML(nr)}${nr.feedback?`<div class="node-feedback"><div><b>上一轮反馈 / 驳回意见</b><button data-copy-feedback>复制</button></div><pre>${escapeHTML(nr.feedback)}</pre></div>`:''}${nodeEventsHTML(r,selected?.id)}${canRerunFromHere(r,selected?.id)?`<div class="node-rerun-row"><button type="button" class="button ghost small" data-rerun-from-here="${escapeHTML(selected.id)}">从这里重跑</button><small>保留上游结果，从本节点及下游重跑</small></div>`:''}${nr.output?`<div class="node-output"><div><b>节点输出</b><button data-copy-output>复制</button></div><pre>${escapeHTML(displayNodeOutput(nr.output))}</pre></div>`:'<div class="node-output empty"><b>节点输出</b><p>节点完成后，结构化输出会显示在这里。</p></div>'}<div class="runtime-details"><span>Sandbox <code>${escapeHTML(nr.sandboxId||'—')}</code></span><span>Session <code>${escapeHTML(nr.sessionId||'—')}</code></span></div></section><section class="node-artifacts"><div class="section-heading"><div><h3>节点交付物</h3><span>${nodeArtifacts.length} 个版本</span></div></div><div class="node-artifact-list">${nodeArtifacts.map(a=>`<button class="node-artifact-card" data-artifact="${escapeHTML(a.id)}"><span class="artifact-file-icon">${a.mediaType==='application/json'?'{}':'MD'}</span><div><b>${escapeHTML(a.name)}</b><span>${escapeHTML(a.path)}</span><small>attempt ${a.attempt} · ${Math.max(1,Math.ceil((a.size||0)/1024))} KB · ${(a.sha256||'').slice(0,10)}</small></div><i>预览 ›</i></button>`).join('')||'<div class="empty-inline"><span>◇</span><p>此节点还没有登记交付物</p></div>'}</div></section></div>${runIsGroupMode(r)?'</details>':''}</div><div class="run-pane" data-run-pane="trace" ${runDetailTab==='trace'?'':'hidden'}><section class="trace-section"><div class="section-heading"><div><h3>${telemetrySectionTitle(telAdapter)}</h3><span>${telPage?`${telemetry.length} 条已加载`:'加载最近 100 条'}</span></div><div class="trace-heading-actions">${telemetrySourceTabs(telAdapter,'data-tel-adapter')}${telPage?.hasMore?`<button class="button ghost small" data-tel-more>加载更早的 100 条</button>`:''}</div></div><div class="telemetry-feed">${telPage?([...telemetry].reverse().map(telemetryItemHTML).join('')||`<div class="empty-inline"><p>${telemetryEmptyHint(telAdapter)}</p></div>`):'<div class="empty-inline"><p>正在加载轨迹…</p></div>'}</div></section></div><div class="run-pane" data-run-pane="logs" ${runDetailTab==='logs'?'':'hidden'}><section class="worker-log-section"><div class="section-heading"><div><h3>Worker 日志</h3><span>${logPage?`${visibleWorkerLogs(logPage.items).length} 条调用`:(logBusy?'正在接收…':'实时加载最近调用')}</span></div><div class="worker-log-heading-actions">${logPage?.hasMore?`<button class="button ghost small" data-logs-more>加载更早的 100 条</button>`:''}</div></div><div class="worker-log-feed">${logPage?(visibleWorkerLogs(logPage.items).map(logLineHTML).join('')||'<div class="empty-inline"><p>该节点没有日志</p></div>'):'<div class="empty-inline"><p>正在加载 Worker 实时日志…</p></div>'}</div></section></div></div>`;  host.querySelector('.run-detail-main')?.insertAdjacentHTML('beforeend',`<div class="run-pane" data-run-pane="workspace" ${runDetailTab==='workspace'?'':'hidden'}>${workspacePaneHTML(r)}</div>${previewEnabled?`<div class="run-pane" data-run-pane="preview" ${runDetailTab==='preview'?'':'hidden'}>${previewPaneHTML(r)}</div>`:''}<div class="run-pane" data-run-pane="eval" ${runDetailTab==='eval'?'':'hidden'}>${runEvalPaneHTML(r)}</div>`);
+   if(keepFrame){const fresh=host.querySelector('iframe[data-vscode-frame]');if(fresh)fresh.replaceWith(existingFrame);}
+   if(keepPreview){const fresh=host.querySelector('iframe[data-preview-frame]');if(fresh)fresh.replaceWith(existingPreviewFrame);}
+   const headerActions=host.querySelector('.run-header-actions');if(r.status==='running'&&headerActions)headerActions.querySelector('[data-cancel-run]')?.insertAdjacentHTML('beforebegin','<button class="button ghost small" data-pause-run>暂停运行</button>');
+@@ -1478,3 +1478,13 @@ async function deleteRun(id){
+     await Promise.all([refreshRuns(),refreshIssues()]);
+   }catch(e){toast(e.message,'err')}
+ }
++
++function nodeEventsHTML(r, nodeId){
++  const events=(r?.events||[]).filter(e=>e.nodeId===nodeId);
++  if(!events.length)return '';
++  const shown=events.slice(-8).map(e=>{
++    const ts=e.timestamp?new Date(e.timestamp).toLocaleString():'';
++    return `<li><code>${escapeHTML(e.type||'')}</code><span>${escapeHTML(ts)}</span><p>${escapeHTML(String(e.message||'').slice(0,600))}</p></li>`;
++  }).join('');
++  return `<div class="node-events"><div><b>节点执行事件</b><span>最近 ${Math.min(events.length,8)} 条</span></div><ul>${shown}</ul></div>`;
++}
+-- 
+2.52.0
+
