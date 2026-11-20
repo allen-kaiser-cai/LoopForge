@@ -47,6 +47,9 @@ func (d *Daemon) keepTaskLease(parent context.Context, task domain.RunnerTask, i
 				}
 			} else if err != nil && ctx.Err() == nil {
 				log.Printf("task %s renew lease: %v", task.ID, err)
+				if errors.Is(err, ErrTaskLeaseLost) {
+					log.Printf("task %s lease lost: platform reclaimed it; task will be reported as failed (TTL may be too short for this task)", task.ID)
+				}
 				if errors.Is(err, ErrUnauthorized) || errors.Is(err, ErrTaskLeaseLost) || (until != nil && !time.Now().Before(*until)) {
 					cancel()
 					return

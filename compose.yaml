@@ -7,7 +7,8 @@ services:
       MYSQL_USER: loopforge
       MYSQL_PASSWORD: ${LOOPFORGE_DB_PASSWORD:?Run scripts/configure.sh first}
       MYSQL_ROOT_PASSWORD: ${LOOPFORGE_DB_ROOT_PASSWORD:?Run scripts/configure.sh first}
-    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci"]
+    # 排序/比较内存：领取 runner 任务时 payload 很大，默认 sort buffer 会报 Error 1038。
+    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci", "--sort_buffer_size=16M", "--max_sort_length=8M", "--skip-log-bin"]
     ports:
       - "127.0.0.1:${LOOPFORGE_MYSQL_PORT:-33315}:3306"
     volumes:
@@ -45,6 +46,10 @@ services:
       HOME: ${LOOPFORGE_DATA_DIR:?Run scripts/configure.sh first}/home
       AGENTFLOW_RUNNER_BINARY: /app/bin/agentflow-runner-{os}-{arch}
       AGENTFLOW_GATE_MCP_BINARY: /app/bin/agentflow-gate-mcp-{os}-{arch}
+      AGENTFLOW_RUNNER_BOOTSTRAP_TOKEN: ${AGENTFLOW_RUNNER_BOOTSTRAP_TOKEN:-}
+      AGENTFLOW_CLOUD_RUNNER_LABEL: ${AGENTFLOW_CLOUD_RUNNER_LABEL:-}
+      AGENTFLOW_CLOUD_RUNNER_PROJECTS: ${AGENTFLOW_CLOUD_RUNNER_PROJECTS:-}
+      AGENTFLOW_LOCAL_EXECUTION: ${AGENTFLOW_LOCAL_EXECUTION:-}
       # Claude Code is not bundled; it is installed from npm here on first use.
       AGENTFLOW_RUNTIME_CLI_DIR: ${LOOPFORGE_DATA_DIR}/cli
     command: ["-workspaces", "${LOOPFORGE_DATA_DIR}/workspaces"]

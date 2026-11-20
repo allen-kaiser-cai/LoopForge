@@ -415,5 +415,20 @@ func newArtifact(runID, nodeID string, attempt int, name, path, mediaType string
 }
 
 func appendArtifact(run *domain.Run, nodeID string, attempt int, name, path, mediaType string, content []byte) {
+	content = clipArtifactContent(name, content)
 	run.Artifacts = append(run.Artifacts, newArtifact(run.ID, nodeID, attempt, name, path, mediaType, content))
+}
+
+// clipArtifactContent 兜底裁剪超限产物：声明产物已在契约校验阶段限制，
+// 但驳回记录等内部产物也要防止把 run_artifacts.content 撑爆。
+func clipArtifactContent(name string, content []byte) []byte {
+	if len(content) <= maxArtifactBytes {
+		return content
+	}
+	note := fmt.Sprintf("\n\n> 产物 %s 超过 %d 字节上限，已截断保存。\n", name, maxArtifactBytes)
+	keep := maxArtifactBytes - len(note)
+	if keep < 0 {
+		keep = 0
+	}
+	return append(append([]byte{}, content[:keep]...), []byte(note)...)
 }

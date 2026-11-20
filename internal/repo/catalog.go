@@ -236,7 +236,7 @@ func BuiltInExecutors() []domain.ExecutorDefinition {
 	return []domain.ExecutorDefinition{
 		{ID: "codebuddy", Name: "CodeBuddy", Kind: "codebuddy", Binary: "codebuddy", Args: []string{"-p", "--output-format", "stream-json", "--include-partial-messages", "-y", "--setting-sources", "none"}, Protocol: "stream-json"},
 		{ID: "codex", Name: "Codex", Kind: "codex", Binary: "codex", Args: []string{"exec", "--json", "--sandbox", "workspace-write", "--skip-git-repo-check"}, Protocol: "jsonl"},
-		{ID: "claude", Name: "Claude Code", Kind: "claude-code", Binary: "claude", Args: []string{"-p", "--output-format", "stream-json", "--permission-mode", "dontAsk"}, Protocol: "stream-json"},
+		{ID: "claude", Name: "Claude Code", Kind: "claude-code", Binary: "claude", Args: []string{"-p", "--verbose", "--output-format", "stream-json", "--permission-mode", "dontAsk"}, Protocol: "stream-json"},
 		{ID: "opencode", Name: "OpenCode", Kind: "opencode", Binary: "opencode", Protocol: "stream-json"},
 		{ID: "cursor", Name: "Cursor CLI", Kind: "cursor", Binary: "cursor-agent", Protocol: "stream-json"},
 		{ID: "agy", Name: "Antigravity", Kind: "agy", Binary: "agy", Protocol: "stream-json"},
