@@ -137,7 +137,46 @@ func (e *Engine) Pause(runID string) error {
 	return nil
 }
 
-func (e *Engine) Approve(runID, nodeID, humanContext string, expected ...NodeExpectation) error {
+// ApprovalActor 是发起审批决定的登录用户；Login 为空表示非登录来源（机器人或内部调用）。
+type ApprovalActor struct {
+	Login string
+	Name  string
+	Admin bool
+}
+
+// ensureApprovalAllowed 校验当前审批人是否有权处理该节点。
+func ensureApprovalAllowed(r domain.Run, nodeID string, actor ApprovalActor) error {
+	var approvers []string
+	var label string
+	for _, n := range r.WorkflowSnapshot.Nodes {
+		if n.ID == nodeID {
+			approvers = n.Approvers
+			label = n.ApproverLabel
+			break
+		}
+	}
+	if len(approvers) == 0 {
+		return nil
+	}
+	who := label
+	if who == "" {
+		who = strings.Join(approvers, "、")
+	}
+	if actor.Login == "" {
+		return fmt.Errorf("该节点需指定审批人（%s），请以被指定账号登录或使用其访问密钥操作", who)
+	}
+	if actor.Admin {
+		return nil
+	}
+	for _, want := range approvers {
+		if strings.EqualFold(strings.TrimSpace(want), actor.Login) {
+			return nil
+		}
+	}
+	return fmt.Errorf("当前账号 %s 不在该节点的审批人名单（%s）", actor.Login, who)
+}
+
+func (e *Engine) Approve(runID, nodeID, humanContext string, actor ApprovalActor, expected ...NodeExpectation) error {
 	e.stateMu.Lock()
 	defer e.stateMu.Unlock()
 	r, ok := e.repo.RunState(runID)
@@ -164,10 +203,22 @@ func (e *Engine) Approve(runID, nodeID, humanContext string, expected ...NodeExp
 	if n == nil || n.Status != "waiting_approval" {
 		return fmt.Errorf("node is not waiting for approval")
 	}
+	if err := ensureApprovalAllowed(r, nodeID, actor); err != nil {
+		return err
+	}
 	n.Status = "succeeded"
 	n.FinishedAt = time.Now().UTC()
+	approver := actor.Login
+	if approver == "" {
+		approver = "未记录登录账号"
+	} else if actor.Name != "" {
+		approver = actor.Login + "（" + actor.Name + "）"
+	}
+	if actor.Admin {
+		approver += "，管理员越过"
+	}
 	note := recordHumanContext(&r, nodeID, "人工批准继续", humanContext)
-	decision := "# Approval\n\nApproved by a human gate.\n"
+	decision := "# Approval\n\nApproved by a human gate.\n\n- 审批人：" + approver + "\n- 时间：" + time.Now().UTC().Format(time.RFC3339) + "\n"
 	if note != "" {
 		decision += "\n" + note + "\n"
 	}
@@ -268,7 +319,7 @@ func (e *Engine) pass(runID, nodeID, humanContext string, expected ...NodeExpect
 	return e.persistControlDecision(runID, r, expected...)
 }
 
-func (e *Engine) Reject(runID string, req domain.RejectRequest, expected ...NodeExpectation) error {
+func (e *Engine) Reject(runID string, req domain.RejectRequest, actor ApprovalActor, expected ...NodeExpectation) error {
 	e.stateMu.Lock()
 	defer e.stateMu.Unlock()
 	r, ok := e.repo.RunState(runID)
@@ -286,6 +337,9 @@ func (e *Engine) Reject(runID string, req domain.RejectRequest, expected ...Node
 		}
 	}
 	if err := checkNodeExpectation(r, expected); err != nil {
+		return err
+	}
+	if err := ensureApprovalAllowed(r, req.NodeID, actor); err != nil {
 		return err
 	}
 	if err := forbidClosedGongfengIssue(e.repo, r); err != nil {
@@ -339,6 +393,40 @@ func (e *Engine) Reject(runID string, req domain.RejectRequest, expected ...Node
 			}
 		}
 	}
+	// 驳回留痕：把这次打回写成不可变产物，审批人和后续重跑都能查。
+	gateName, targetName := req.NodeID, target
+	for _, n := range wf.Nodes {
+		if n.ID == req.NodeID {
+			gateName = n.Name
+		}
+		if n.ID == target {
+			targetName = n.Name
+		}
+	}
+	actorLabel := strings.TrimSpace(actor.Name)
+	if actorLabel == "" {
+		actorLabel = strings.TrimSpace(actor.Login)
+	}
+	if actorLabel == "" {
+		actorLabel = "系统"
+	}
+	override := ""
+	if actor.Admin {
+		override = "（管理员越过审批人名单）"
+	}
+	targetNode := r.Nodes[target]
+	reworkCount := 0
+	if targetNode != nil {
+		reworkCount = targetNode.ReworkCount
+	}
+	record := fmt.Sprintf("# 驳回记录\n\n| 项 | 内容 |\n| --- | --- |\n| 驳回节点 | %s（%s） |\n| 打回目标 | %s（%s） |\n| 驳回人 | %s%s |\n| 时间 | %s |\n| 目标节点返工次数 | %d |\n\n## 驳回原因\n\n%s\n\n## 人工补充上下文\n\n%s\n",
+		gateName, req.NodeID, targetName, target, actorLabel, override,
+		time.Now().UTC().Format(time.RFC3339), reworkCount, req.Reason, req.Context)
+	gateAttempt := 0
+	if gate := r.Nodes[req.NodeID]; gate != nil {
+		gateAttempt = gate.Attempt
+	}
+	appendArtifact(&r, req.NodeID, gateAttempt, "reject-record", "reject-record.md", "text/markdown", []byte(record))
 	e.event(&r, req.NodeID, "gate.rejected", fmt.Sprintf("打回到 %s：%s", target, req.Reason))
 	appendControlTelemetry(&r, req.NodeID, "gate.rejected", fmt.Sprintf("打回到 %s：%s", target, req.Reason))
 	r.Status = "running"

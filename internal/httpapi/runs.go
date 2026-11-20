@@ -85,7 +85,7 @@ func (h *runsHandlers) runs(c *gin.Context) {
 			respond(c, err)
 			return
 		}
-		c.JSON(200, runSummaries(runs))
+		c.JSON(200, h.enrichWaitingApprovers(runSummaries(runs)))
 		return
 	}
 	if r.Method == http.MethodPost {
@@ -258,7 +258,7 @@ func (h *runsHandlers) run(c *gin.Context) {
 			if rejectBlockedIssueRun(h.deps, c, id) {
 				return
 			}
-			respond(c, h.engine.Approve(id, req.NodeID, req.Context, decisionExpectation(req.NodeID, req.Expected)...))
+			respond(c, h.engine.Approve(id, req.NodeID, req.Context, approvalActor(c, h.deps), decisionExpectation(req.NodeID, req.Expected)...))
 		}
 	case "/api/runs/:id/reject":
 		var req domain.RejectRequest
@@ -266,7 +266,7 @@ func (h *runsHandlers) run(c *gin.Context) {
 			if rejectBlockedIssueRun(h.deps, c, id) {
 				return
 			}
-			respond(c, h.engine.Reject(id, req, decisionExpectation(req.NodeID, req.Expected)...))
+			respond(c, h.engine.Reject(id, req, approvalActor(c, h.deps), decisionExpectation(req.NodeID, req.Expected)...))
 		}
 	case "/api/runs/:id/retry":
 		var req domain.HumanDecision
@@ -344,6 +344,7 @@ func publicRun(run domain.Run, summary bool) domain.Run {
 	if summary {
 		run.Artifacts = nil
 	}
+	applyUsagePricing(&run)
 	run.Artifacts = append([]domain.Artifact(nil), run.Artifacts...)
 	for i := range run.Artifacts {
 		run.Artifacts[i].Content = ""
@@ -499,9 +500,90 @@ func clipRunText(value string, n int) string {
 	return value[:n] + "…"
 }
 
+// approvalActor 从请求上下文解析当前登录用户，用于审批人校验与审计记录。
+func approvalActor(c *gin.Context, d *deps) engine.ApprovalActor {
+	actor := engine.ApprovalActor{}
+	if u, ok := d.requestUser(c.Request, true); ok && u != nil {
+		actor.Login = u.LoginName
+		actor.Name = u.ChineseName
+		actor.Admin = u.IsPlatformAdmin
+	}
+	return actor
+}
+
 func decisionExpectation(nodeID string, expected *domain.NodeDecisionExpectation) []engine.NodeExpectation {
 	if expected == nil {
 		return nil
 	}
 	return []engine.NodeExpectation{{NodeID: nodeID, Status: expected.Status, Attempt: expected.Attempt, ReworkCount: expected.ReworkCount}}
+}
+
+// enrichWaitingApprovers 给等待审批的运行摘要补上待审节点与审批人用户 ID，
+// 让「待我确认」可以按人过滤（审批人名单存的是登录名，这里转换成用户 ID）。
+func (h *runsHandlers) enrichWaitingApprovers(runs []domain.Run) []domain.Run {
+	for i := range runs {
+		if runs[i].Status != "waiting" {
+			continue
+		}
+		view, ok := h.repo.RunView(runs[i].ID)
+		if !ok {
+			continue
+		}
+		nodeID := ""
+		for id, node := range view.Nodes {
+			if node != nil && node.Status == "waiting_approval" {
+				nodeID = id
+				break
+			}
+		}
+		if nodeID == "" {
+			continue
+		}
+		for _, node := range view.WorkflowSnapshot.Nodes {
+			if node.ID != nodeID {
+				continue
+			}
+			runs[i].WaitingNodeID = node.ID
+			runs[i].WaitingNodeName = node.Name
+			runs[i].WaitingApproverLabel = node.ApproverLabel
+			for _, login := range node.Approvers {
+				if user, found := h.repo.UserByLoginName(strings.TrimSpace(login)); found {
+					runs[i].WaitingApproverIDs = append(runs[i].WaitingApproverIDs, user.ID)
+				}
+			}
+			break
+		}
+	}
+	return runs
+}
+
+// applyUsagePricing 用平台价目表重算成本，避免 CLI 上报的 Anthropic 价格
+// 污染百炼/DeepSeek 等模型；原始上报值保留在 ReportedCostUSD 里供对账。
+func applyUsagePricing(run *domain.Run) {
+	anyNode, allPriced, total := false, true, 0.0
+	for _, node := range run.Nodes {
+		if node == nil {
+			continue
+		}
+		u := node.Usage
+		if u.InputTokens+u.OutputTokens+u.CacheReadTokens+u.CacheWriteTokens == 0 {
+			continue
+		}
+		anyNode = true
+		est := domain.AnalyticsPricedUsage(node.Model, u, false)
+		if est.CostStatus != "estimated" || est.CostUSD == 0 && u.CostUSD > 0 {
+			allPriced = false
+			continue
+		}
+		u.ReportedCostUSD = u.CostUSD
+		u.CostUSD = est.CostUSD
+		u.CostStatus = "estimated"
+		node.Usage = u
+		total += est.CostUSD
+	}
+	if anyNode && allPriced && run.Usage.CostStatus == "reported" {
+		run.Usage.ReportedCostUSD = run.Usage.CostUSD
+		run.Usage.CostUSD = total
+		run.Usage.CostStatus = "estimated"
+	}
 }
