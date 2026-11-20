@@ -93,7 +93,38 @@ func PrepareMCPCall(sandbox Sandbox, workspace string, servers []domain.MCPServe
 			Aliases:    mcpCallAliases(server),
 		})
 	}
-	raw, err := json.MarshalIndent(cfg, "", "  ")
+	// 同一份文件要同时满足两种消费方：平台自身的 mcp call 读取 "servers"，
+	// 而 Claude Code CLI 的 --mcp-config 只认 "mcpServers"。两边都写上，
+	// 避免把平台内部结构直接喂给 CLI 导致启动即退出。
+	mcpServers := make(map[string]any, len(cfg.Servers))
+	for _, server := range cfg.Servers {
+		entry := map[string]any{}
+		if strings.EqualFold(server.Transport, "http") {
+			entry["type"] = "http"
+			if server.URL != "" {
+				entry["url"] = server.URL
+			}
+		} else {
+			entry["type"] = "stdio"
+			entry["command"] = server.Command
+			if len(server.Args) > 0 {
+				entry["args"] = server.Args
+			}
+		}
+		if len(server.Environment) > 0 {
+			entry["env"] = server.Environment
+		}
+		if len(server.Headers) > 0 {
+			entry["headers"] = server.Headers
+		}
+		name := server.Name
+		if name == "" {
+			name = server.ID
+		}
+		mcpServers[name] = entry
+	}
+	document := map[string]any{"servers": cfg.Servers, "mcpServers": mcpServers}
+	raw, err := json.MarshalIndent(document, "", "  ")
 	if err != nil {
 		return nil, err
 	}
