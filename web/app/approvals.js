@@ -342,7 +342,8 @@ function approvalItems(){
   // 登录用户只看分派给自己的流程；responsibleUserId 为 0 的历史/无主流程对所有人可见，
   // 避免升级后旧数据被藏没（可用新增的「取消流程」清理）。
   if(!uid)return waiting;
-  return waiting.filter(r=>{const rid=Number(r.executionContext?.responsibleUserId||0);return rid===0||rid===uid});
+  // 责任人之外，节点审批人（waitingApproverIds）也应看到该待办。
+  return waiting.filter(r=>{const rid=Number(r.executionContext?.responsibleUserId||0);if(rid===0||rid===uid)return true;const ids=Array.isArray(r.waitingApproverIds)?r.waitingApproverIds.map(Number):[];return ids.includes(uid)});
 }
 // /api/bootstrap 不带 runs，首屏单独拉一次，否则徽标要等进了「待我确认」才出现。
 async function preloadApprovalBadge(){try{const runs=await api('/api/runs',{silent:true});if(Array.isArray(runs)){state.data.runs=runs;updateApprovalBadge()}}catch{}}

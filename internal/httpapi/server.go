@@ -514,6 +514,7 @@ func newWithNotifications(s *repo.Store, e *engine.Engine, syncSvc *tracker.Serv
 
 	// --- runs ---
 	g.GET("/api/runs", api.runs.runs)
+	g.GET("/api/approvals", api.runs.pendingApprovals)
 	g.POST("/api/runs", api.runs.runs)
 	g.GET("/api/runs/:id", api.runs.run)
 	g.DELETE("/api/runs/:id", api.runs.run)

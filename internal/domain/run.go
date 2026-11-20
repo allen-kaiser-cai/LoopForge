@@ -47,6 +47,11 @@ type Run struct {
 	Usage             TokenUsage          `json:"usage"`
 	ToolCalls         int                 `json:"toolCalls"`
 	Artifacts         []Artifact          `json:"artifacts,omitempty"`
+	// WaitingApproverIDs 是当前待审批节点配置的审批人用户 ID（仅 waiting 运行填充，前端按人过滤用）。
+	WaitingNodeID        string  `json:"waitingNodeId,omitempty"`
+	WaitingNodeName      string  `json:"waitingNodeName,omitempty"`
+	WaitingApproverLabel string  `json:"waitingApproverLabel,omitempty"`
+	WaitingApproverIDs   []int64 `json:"waitingApproverIds,omitempty"`
 	ArtifactCount     int                 `json:"artifactCount,omitempty"`
 	HumanContext      string              `json:"humanContext,omitempty"`
 	Timing            *RunTiming          `json:"timing,omitempty"`
@@ -190,6 +195,9 @@ type TokenUsage struct {
 	// CostStatus 区分"成本为 0"与"成本未知"：reported（适配器上报）、estimated（按 token 估算）、
 	// unknown（未识别，展示为"未识别"而不是 ¥0）。空值视为 unknown，旧数据向后兼容。
 	CostStatus string `json:"costStatus,omitempty"`
+	// ReportedCostUSD 是适配器上报的金额（CLI 自带价目表，可能与模型真实价格不符）。
+	// CostUSD 在展示层按平台价目表重算，这里保留原始值用于对账。
+	ReportedCostUSD float64 `json:"reportedCostUsd,omitempty"`
 }
 
 type TelemetryEvent struct {
