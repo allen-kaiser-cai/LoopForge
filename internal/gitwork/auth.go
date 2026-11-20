@@ -79,15 +79,15 @@ func TokenFrom(ctx context.Context) string {
 // for command-line -c and GIT_CONFIG_COUNT so clone/fetch/push and an Agent
 // CLI's own git all see one rewrite.
 var gongfengInsteadOfPrefixes = []string{
-	"git@git.example.com:",
-	"ssh://git@git.example.com/",
-	"https://git.example.com/",
-	"http://git.example.com/",
+	"git@gitlabnew.inter.wcansoft.com:",
+	"ssh://git@gitlabnew.inter.wcansoft.com/",
+	"http://gitlabnew.inter.wcansoft.com/",
+	"http://gitlabnew.inter.wcansoft.com/",
 }
 
 func authedBase(token string) string {
 	user, secret := SplitToken(token)
-	return "https://" + user + ":" + secret + "@git.example.com/"
+	return "http://" + user + ":" + secret + "@gitlabnew.inter.wcansoft.com/"
 }
 
 // SandboxEnv is the git environment for a child process: no interactive

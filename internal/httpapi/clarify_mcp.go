@@ -225,8 +225,8 @@ func gongfengProjectPathFromClarifyURL(raw string) string {
 		return ""
 	}
 	path := raw
-	if i := strings.Index(strings.ToLower(raw), "git.example.com/"); i >= 0 {
-		path = raw[i+len("git.example.com/"):]
+	if i := strings.Index(strings.ToLower(raw), "gitlabnew.inter.wcansoft.com/"); i >= 0 {
+		path = raw[i+len("gitlabnew.inter.wcansoft.com/"):]
 	}
 	parts := strings.FieldsFunc(path, func(r rune) bool { return r == '/' })
 	for i, part := range parts {

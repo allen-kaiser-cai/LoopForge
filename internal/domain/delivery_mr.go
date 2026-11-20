@@ -31,7 +31,7 @@ func GongfengMRURL(project string, iid int) string {
 	if strings.HasPrefix(project, "github:") {
 		return fmt.Sprintf("https://github.com/%s/pull/%d", strings.TrimPrefix(project, "github:"), iid)
 	}
-	return fmt.Sprintf("https://git.example.com/%s/-/merge_requests/%d", project, iid)
+	return fmt.Sprintf("http://gitlabnew.inter.wcansoft.com/%s/-/merge_requests/%d", project, iid)
 }
 
 // AggregateDeliveryMRState folds per-MR states into the work item label state.

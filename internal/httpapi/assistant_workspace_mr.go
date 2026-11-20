@@ -26,7 +26,7 @@ import (
 // the branch and commit without calling a hosting API.
 // SOP runs keep delivering through nodes.
 
-const gongfengWebBase = "https://git.example.com"
+const gongfengWebBase = "http://gitlabnew.inter.wcansoft.com"
 
 // githubWebBase and githubAPIBase are variables so tests can use a local server.
 var (

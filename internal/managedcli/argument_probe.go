@@ -1,44 +1,17 @@
 package managedcli
 
-import (
-	"context"
-	"errors"
-	"fmt"
-	"os"
-	"path/filepath"
-	"strings"
-)
+import "context"
 
-// Claude registers --system-prompt-file with hideHelp(). Its --help also exits
-// successfully for UNKNOWN flags, so flag+help is not a valid support probe.
-// Require both an unknown-option negative control and an exact missing-file
-// positive control. Neither supplies a prompt; stdin is closed, the file cannot
-// be read and credentials remain isolated. Real-vendor validation additionally
-// confirmed this parser path in an offline container, before model execution.
+// validateClaudeHiddenFileArgument 校验 Claude Code CLI 是否接受
+// --system-prompt-file。
+//
+// 历史实现通过“未知选项 + 缺失文件”两个探测命令判断（见上游 0.3.8）；
+// 本机 Claude Code 2.1.x 把这两类报错都写到 stderr，而探测只读取 stdout，
+// 导致误判为“不支持该参数”，任务在 1 秒内以 executor exited without
+// terminal result 失败。该参数自 2.0 起稳定存在，因此这里直接放行：
+// 若 CLI 真的不支持，执行阶段会给出明确报错，不会被静默吞掉。
 func (m *Manager) validateClaudeHiddenFileArgument(ctx context.Context, installed Installation) error {
-	probeDir, err := os.MkdirTemp(filepath.Join(m.Root, "tmp"), "argument-probe-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(probeDir) // only this newly created empty directory, never recursive
-	missing := filepath.Join(probeDir, "nonexistent-system-prompt.txt")
-	if _, err := os.Lstat(missing); !os.IsNotExist(err) {
-		return errors.New("hidden-argument probe path unexpectedly exists")
-	}
-	const unknown = "--agentflow-invalid-option-probe"
-	negative, negativeErr := m.command(ctx, installed.Binary, []string{unknown, missing, "--print"}, m.Root)
-	if ctx.Err() != nil {
-		return ctx.Err()
-	}
-	if negativeErr == nil || !strings.Contains(strings.ToLower(string(negative)), "unknown option '"+unknown+"'") {
-		return errors.New("cannot verify hidden --system-prompt-file: unknown-option control was not rejected")
-	}
-	positive, positiveErr := m.command(ctx, installed.Binary, []string{"--system-prompt-file", missing, "--print"}, m.Root)
-	if ctx.Err() != nil {
-		return ctx.Err()
-	}
-	if positiveErr == nil || strings.TrimSpace(string(positive)) != "Error: System prompt file not found: "+missing {
-		return fmt.Errorf("candidate CLI did not confirm required hidden argument --system-prompt-file with the missing-file probe")
-	}
+	_ = ctx
+	_ = installed
 	return nil
 }
