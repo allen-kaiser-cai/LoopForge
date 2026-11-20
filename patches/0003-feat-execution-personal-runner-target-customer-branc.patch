@@ -1,7 +1,7 @@
 From c148bd672637ec1ac6e4fd087802cf3511cfb16c Mon Sep 17 00:00:00 2001
 From: caiyihua <caiyihua@wcansoft.com>
 Date: Fri, 20 Nov 2026 11:55:06 +0800
-Subject: [PATCH 3/5] feat(execution): personal runner target, customer branch
+Subject: [PATCH 3/7] feat(execution): personal runner target, customer branch
  lines and SSP branch naming
 
 ---

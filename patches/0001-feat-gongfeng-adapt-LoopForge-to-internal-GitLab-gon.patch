@@ -1,7 +1,7 @@
 From a86fa553d385bd6913df1b6ecea557d8feeb7048 Mon Sep 17 00:00:00 2001
 From: caiyihua <caiyihua@wcansoft.com>
 Date: Fri, 20 Nov 2026 11:55:05 +0800
-Subject: [PATCH 1/5] feat(gongfeng): adapt LoopForge to internal GitLab
+Subject: [PATCH 1/7] feat(gongfeng): adapt LoopForge to internal GitLab
  (gongfeng) endpoints and MCP wiring
 
 ---

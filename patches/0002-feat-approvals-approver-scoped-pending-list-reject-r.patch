@@ -1,7 +1,7 @@
 From eaf12f424c1fbe9824124099a2979c87314ac850 Mon Sep 17 00:00:00 2001
 From: caiyihua <caiyihua@wcansoft.com>
 Date: Fri, 20 Nov 2026 11:55:06 +0800
-Subject: [PATCH 2/5] feat(approvals): approver-scoped pending list, reject
+Subject: [PATCH 2/7] feat(approvals): approver-scoped pending list, reject
  records and visible run events
 
 ---
