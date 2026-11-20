@@ -793,6 +793,8 @@ func (d *Daemon) executeInvocation(ctx context.Context, task domain.RunnerTask) 
 	if err := os.MkdirAll(workspace, 0o755); err != nil {
 		return execResult{status: domain.RunnerTaskFailed, errMsg: fmt.Sprintf("workspace %s: %v", workspace, err)}, nil
 	}
+	// 有候选仓库就预克隆（交互式设计阶段按基线只读检出）；
+	// 没候选仓库时工作区留空，由员工按领域知识自行 clone。
 	if err := checkoutInvocationRepositories(ctx, workspace, inv, runnerTaskSandboxDriver(task)); err != nil {
 		return execResult{status: domain.RunnerTaskFailed, errMsg: fmt.Sprintf("repository checkout: %v", err)}, nil
 	}
@@ -915,7 +917,10 @@ func (d *Daemon) executeInvocation(ctx context.Context, task domain.RunnerTask) 
 		argv = runtime.BindMCPCallArgv(sandbox, argv)
 	}
 	var result execResult
-	if sandbox != nil {
+	if inv.Interactive {
+		// 终端接管：在 tmux 里交互执行，等人工提交后写终态。
+		result = d.executeInteractiveInvocation(ctx, task, workspace, argv, commandEnv)
+	} else if sandbox != nil {
 		command := prepared.Command
 		command.Argv = argv
 		command = runtime.WithCommandEnvironment(command, commandEnv)

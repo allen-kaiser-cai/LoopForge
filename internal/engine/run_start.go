@@ -140,25 +140,39 @@ func (e *Engine) startWorkflowDefinition(wf domain.WorkflowDefinition, input str
 			}
 		}
 	}
-	assignWorkBranches(repositories, func() string {
-		issueID := strings.TrimSpace(executionContext.IssueID)
-		if issueID != "" {
-			if issue, ok := e.repo.Issue(issueID); ok {
-				author := ""
-				if user, found := e.repo.User(executionContext.ResponsibleUserID); found {
-					author = user.LoginName
-				}
-				branch := domain.SpecWorkBranch(issue, author, now)
-				valid := regexp.MustCompile(`^(feature|hotfix|refactoring|optimization)-[0-9]{8}-[a-z0-9]+-[^ /]+$`)
-				if valid.MatchString(branch) {
-					return branch
-				}
-				log.Printf("branch naming: %q 不符合 SSP 规范，回退默认命名", branch)
-				return domain.DefaultWorkBranch(issue, now)
-			}
+	if wf.NoPreloadRepositories {
+		log.Printf("workflow %s: noPreloadRepositories=true，运行不预加载仓库", wf.ID)
+		repositories = nil
+	}
+	if wf.AnalysisOnly {
+		// 分析模式：只拉基线最新代码，不创建功能分支（设计阶段只读分析用）。
+		for i := range repositories {
+			repositories[i].WorkBranch = ""
+			repositories[i].CreateNewWorkBranch = false
 		}
-		return defaultWorkBranch(executionContext.IssueNumber, issueID, now)
-	})
+		log.Printf("workflow %s: analysisOnly=true，%d 个仓库按基线只读检出", wf.ID, len(repositories))
+	}
+	if !wf.AnalysisOnly {
+		assignWorkBranches(repositories, func() string {
+			issueID := strings.TrimSpace(executionContext.IssueID)
+			if issueID != "" {
+				if issue, ok := e.repo.Issue(issueID); ok {
+					author := ""
+					if user, found := e.repo.User(executionContext.ResponsibleUserID); found {
+						author = user.LoginName
+					}
+					branch := domain.SpecWorkBranch(issue, author, now)
+					valid := regexp.MustCompile(`^(feature|hotfix|refactoring|optimization)-[0-9]{8}-[a-z0-9]+-[^ /]+$`)
+					if valid.MatchString(branch) {
+						return branch
+					}
+					log.Printf("branch naming: %q 不符合 SSP 规范，回退默认命名", branch)
+					return domain.DefaultWorkBranch(issue, now)
+				}
+			}
+			return defaultWorkBranch(executionContext.IssueNumber, issueID, now)
+		})
+	}
 	var firstRepository domain.RepositoryContext
 	if len(repositories) > 0 {
 		firstRepository = repositories[0]

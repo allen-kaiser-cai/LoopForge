@@ -365,6 +365,14 @@ esac
 # ---------- 1. 安装二进制 ----------
 install_binary() {
   mkdir -p "$BIN_DIR"
+  printf '\nInstalling lf-session helper…\n'
+  if curl -fsSL "${SERVER%/}/runners/lf-session" -o "$BIN_DIR/lf-session" 2>/dev/null; then
+    chmod +x "$BIN_DIR/lf-session"
+    printf '  installed %s\n' "$BIN_DIR/lf-session"
+  else
+    printf '  warning: lf-session download failed; run again with --upgrade to retry\n'
+  fi
+
   TEMP_BINARY=$(mktemp "${BIN_DIR}/.agentflow-runner.XXXXXX")
   if [[ -n "$LOCAL_BINARY" ]]; then
     [[ -f "$LOCAL_BINARY" ]] || fail "本地二进制不存在: $LOCAL_BINARY"
