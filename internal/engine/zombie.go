@@ -76,11 +76,23 @@ func (e *Engine) detectZombieRuns() {
 			continue
 		}
 		interactive := false
-		for _, node := range run.Nodes {
+		// 交互节点（终端接管）在等人，可能几十分钟到几小时没有状态写入，
+		// 不能按“无更新”判僵尸；会话有 48 小时上限由 Runner 自己兜底。
+		interactiveNodes := map[string]bool{}
+		for _, cfg := range run.WorkflowSnapshot.Nodes {
+			if cfg.Interactive {
+				interactiveNodes[cfg.ID] = true
+			}
+		}
+		for id, node := range run.Nodes {
 			if node == nil {
 				continue
 			}
 			if node.Status == "pending_input" || node.Status == "waiting_approval" {
+				interactive = true
+				break
+			}
+			if node.Status == "running" && interactiveNodes[id] {
 				interactive = true
 				break
 			}

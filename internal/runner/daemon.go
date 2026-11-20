@@ -948,7 +948,10 @@ func (d *Daemon) executeInvocation(ctx context.Context, task domain.RunnerTask) 
 		argv = runtime.BindMCPCallArgv(sandbox, argv)
 	}
 	var result execResult
-	if sandbox != nil {
+	if inv.Interactive {
+		// 终端接管：在 tmux 里交互执行，等人工提交后写终态。
+		result = d.executeInteractiveInvocation(ctx, task, workspace, argv, commandEnv)
+	} else if sandbox != nil {
 		command := prepared.Command
 		command.Argv = argv
 		command = runtime.WithCommandEnvironment(command, commandEnv)

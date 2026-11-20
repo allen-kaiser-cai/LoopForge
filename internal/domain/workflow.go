@@ -174,9 +174,13 @@ type WorkflowDefinition struct {
 	// ExecutionTarget 决定这条流程落在哪类执行机上：
 	// personal = 责任人自己的电脑（人机协同、需要个人知识/技能）；cloud = 云池（无人值守的标准动作）。
 	// 空值沿用历史行为（云池优先）。
-	ExecutionTarget string                `json:"executionTarget,omitempty"`
-	Generic         bool                  `json:"generic,omitempty"`
-	Requirements    []WorkflowRequirement `json:"requirements,omitempty"`
+	ExecutionTarget string `json:"executionTarget,omitempty"`
+	// NoPreloadRepositories 为 true 时不预克隆仓库（交互式设计阶段由员工自行 clone）。
+	NoPreloadRepositories bool `json:"noPreloadRepositories,omitempty"`
+	// AnalysisOnly 表示只做分析：按环境线拉基线最新代码，不创建/不切功能分支。
+	AnalysisOnly bool                  `json:"analysisOnly,omitempty"`
+	Generic      bool                  `json:"generic,omitempty"`
+	Requirements []WorkflowRequirement `json:"requirements,omitempty"`
 	// SandboxSnapshot is populated only on Run.WorkflowSnapshot. It freezes
 	// the resolved profile plus Dockerfile/environment payload so retries can
 	// reconstruct the original environment after catalog definitions change.

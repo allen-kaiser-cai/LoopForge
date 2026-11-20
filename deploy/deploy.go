@@ -4,12 +4,21 @@ package deploy
 
 import "embed"
 
-//go:embed bind-cli.sh
+//go:embed bind-cli.sh lf-session.sh
 var Files embed.FS
 
 // BindCLIScript returns the bind-cli.sh installer content.
 func BindCLIScript() []byte {
 	data, err := Files.ReadFile("bind-cli.sh")
+	if err != nil {
+		return nil
+	}
+	return data
+}
+
+// LFSessionScript returns the lf-session helper installed next to the runner.
+func LFSessionScript() []byte {
+	data, err := Files.ReadFile("lf-session.sh")
 	if err != nil {
 		return nil
 	}
