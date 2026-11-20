@@ -1,7 +1,7 @@
 From bb401566b35e25b7714de79af736e7d0e9b2e5d4 Mon Sep 17 00:00:00 2001
 From: caiyihua <caiyihua@wcansoft.com>
 Date: Fri, 20 Nov 2026 11:55:06 +0800
-Subject: [PATCH 4/5] fix(stability): zombie runs, task lease grace, artifact
+Subject: [PATCH 4/7] fix(stability): zombie runs, task lease grace, artifact
  limits and claim query
 
 ---

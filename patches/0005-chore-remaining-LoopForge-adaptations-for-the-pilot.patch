@@ -1,7 +1,7 @@
 From 24ff829b07164dbc351ee8325f4b047a8114826c Mon Sep 17 00:00:00 2001
 From: caiyihua <caiyihua@wcansoft.com>
 Date: Fri, 20 Nov 2026 11:55:06 +0800
-Subject: [PATCH 5/5] chore: remaining LoopForge adaptations for the pilot
+Subject: [PATCH 5/7] chore: remaining LoopForge adaptations for the pilot
 
 ---
  internal/runtime/mcp_call.go | 33 ++++++++++++++++++++++++++++++++-
