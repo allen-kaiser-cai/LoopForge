@@ -1,0 +1,56 @@
+From 24ff829b07164dbc351ee8325f4b047a8114826c Mon Sep 17 00:00:00 2001
+From: caiyihua <caiyihua@wcansoft.com>
+Date: Fri, 20 Nov 2026 11:55:06 +0800
+Subject: [PATCH 5/5] chore: remaining LoopForge adaptations for the pilot
+
+---
+ internal/runtime/mcp_call.go | 33 ++++++++++++++++++++++++++++++++-
+ 1 file changed, 32 insertions(+), 1 deletion(-)
+
+diff --git a/internal/runtime/mcp_call.go b/internal/runtime/mcp_call.go
+index cd965cd..e73f828 100644
+--- a/internal/runtime/mcp_call.go
++++ b/internal/runtime/mcp_call.go
+@@ -93,7 +93,38 @@ func PrepareMCPCall(sandbox Sandbox, workspace string, servers []domain.MCPServe
+ 			Aliases:    mcpCallAliases(server),
+ 		})
+ 	}
+-	raw, err := json.MarshalIndent(cfg, "", "  ")
++	// 同一份文件要同时满足两种消费方：平台自身的 mcp call 读取 "servers"，
++	// 而 Claude Code CLI 的 --mcp-config 只认 "mcpServers"。两边都写上，
++	// 避免把平台内部结构直接喂给 CLI 导致启动即退出。
++	mcpServers := make(map[string]any, len(cfg.Servers))
++	for _, server := range cfg.Servers {
++		entry := map[string]any{}
++		if strings.EqualFold(server.Transport, "http") {
++			entry["type"] = "http"
++			if server.URL != "" {
++				entry["url"] = server.URL
++			}
++		} else {
++			entry["type"] = "stdio"
++			entry["command"] = server.Command
++			if len(server.Args) > 0 {
++				entry["args"] = server.Args
++			}
++		}
++		if len(server.Environment) > 0 {
++			entry["env"] = server.Environment
++		}
++		if len(server.Headers) > 0 {
++			entry["headers"] = server.Headers
++		}
++		name := server.Name
++		if name == "" {
++			name = server.ID
++		}
++		mcpServers[name] = entry
++	}
++	document := map[string]any{"servers": cfg.Servers, "mcpServers": mcpServers}
++	raw, err := json.MarshalIndent(document, "", "  ")
+ 	if err != nil {
+ 		return nil, err
+ 	}
+-- 
+2.52.0
+

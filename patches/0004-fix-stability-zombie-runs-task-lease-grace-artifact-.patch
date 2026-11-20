@@ -1,0 +1,448 @@
+From bb401566b35e25b7714de79af736e7d0e9b2e5d4 Mon Sep 17 00:00:00 2001
+From: caiyihua <caiyihua@wcansoft.com>
+Date: Fri, 20 Nov 2026 11:55:06 +0800
+Subject: [PATCH 4/5] fix(stability): zombie runs, task lease grace, artifact
+ limits and claim query
+
+---
+ compose.yaml                                 |   7 +-
+ internal/application/operations.go           |   1 +
+ internal/engine/artifacts.go                 |  15 +++
+ internal/engine/engine.go                    |   1 +
+ internal/engine/run_state.go                 |  33 +++++
+ internal/engine/zombie.go                    | 123 +++++++++++++++++++
+ internal/httpapi/assistant_native_session.go |   2 +-
+ internal/httpapi/bot_interactions.go         |   4 +-
+ internal/httpapi/catalog.go                  |   2 +-
+ internal/httpapi/room_runs.go                |   5 +-
+ internal/repo/catalog.go                     |   2 +-
+ internal/repo/runners.go                     |  30 +++++
+ internal/repo/runs.go                        |   3 +-
+ internal/runner/task_lease.go                |   3 +
+ 14 files changed, 222 insertions(+), 9 deletions(-)
+ create mode 100644 internal/engine/zombie.go
+
+diff --git a/compose.yaml b/compose.yaml
+index 718e6df..89a85e7 100644
+--- a/compose.yaml
++++ b/compose.yaml
+@@ -7,7 +7,8 @@ services:
+       MYSQL_USER: loopforge
+       MYSQL_PASSWORD: ${LOOPFORGE_DB_PASSWORD:?Run scripts/configure.sh first}
+       MYSQL_ROOT_PASSWORD: ${LOOPFORGE_DB_ROOT_PASSWORD:?Run scripts/configure.sh first}
+-    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci"]
++    # 排序/比较内存：领取 runner 任务时 payload 很大，默认 sort buffer 会报 Error 1038。
++    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci", "--sort_buffer_size=16M", "--max_sort_length=8M", "--skip-log-bin"]
+     ports:
+       - "127.0.0.1:${LOOPFORGE_MYSQL_PORT:-33315}:3306"
+     volumes:
+@@ -45,6 +46,10 @@ services:
+       HOME: ${LOOPFORGE_DATA_DIR:?Run scripts/configure.sh first}/home
+       AGENTFLOW_RUNNER_BINARY: /app/bin/agentflow-runner-{os}-{arch}
+       AGENTFLOW_GATE_MCP_BINARY: /app/bin/agentflow-gate-mcp-{os}-{arch}
++      AGENTFLOW_RUNNER_BOOTSTRAP_TOKEN: ${AGENTFLOW_RUNNER_BOOTSTRAP_TOKEN:-}
++      AGENTFLOW_CLOUD_RUNNER_LABEL: ${AGENTFLOW_CLOUD_RUNNER_LABEL:-}
++      AGENTFLOW_CLOUD_RUNNER_PROJECTS: ${AGENTFLOW_CLOUD_RUNNER_PROJECTS:-}
++      AGENTFLOW_LOCAL_EXECUTION: ${AGENTFLOW_LOCAL_EXECUTION:-}
+       # Claude Code is not bundled; it is installed from npm here on first use.
+       AGENTFLOW_RUNTIME_CLI_DIR: ${LOOPFORGE_DATA_DIR}/cli
+     command: ["-workspaces", "${LOOPFORGE_DATA_DIR}/workspaces"]
+diff --git a/internal/application/operations.go b/internal/application/operations.go
+index d68b3dd..9bf32ea 100644
+--- a/internal/application/operations.go
++++ b/internal/application/operations.go
+@@ -90,6 +90,7 @@ func PublicOperations() []Operation {
+ 		{Name: "workflow_metrics_get", Description: "Get SOP workflow operating metrics", Method: "GET", Path: "/api/workflow-metrics", ReadOnly: true},
+ 		{Name: "analytics_get", Description: "Get usage and delivery analytics", Method: "GET", Path: "/api/analytics", ReadOnly: true},
+ 		{Name: "observability_spec_get", Description: "Get the LoopForge observability contract", Method: "GET", Path: "/api/observability/spec", ReadOnly: true},
++		{Name: "approvals_pending", Description: "List human approval tasks assigned to the current account", Method: "GET", Path: "/api/approvals", ReadOnly: true},
+ 		{Name: "runs_list", Description: "List lightweight Run summaries", Method: "GET", Path: "/api/runs", ReadOnly: true},
+ 		{Name: "runs_control_get", Description: "Read the run mode (sop or workspace), waiting reason, allowed control actions and delivery acceptance. Node execution progress is separate from test results and user acceptance. Read this before changing a run's state.", Method: "GET", Path: "/api/runs/{id}/control", ReadOnly: true},
+ 		{Name: "runs_start", Description: "Start an SOP Run", Method: "POST", Path: "/api/runs"},
+diff --git a/internal/engine/artifacts.go b/internal/engine/artifacts.go
+index fc364e6..edda155 100644
+--- a/internal/engine/artifacts.go
++++ b/internal/engine/artifacts.go
+@@ -415,5 +415,20 @@ func newArtifact(runID, nodeID string, attempt int, name, path, mediaType string
+ }
+ 
+ func appendArtifact(run *domain.Run, nodeID string, attempt int, name, path, mediaType string, content []byte) {
++	content = clipArtifactContent(name, content)
+ 	run.Artifacts = append(run.Artifacts, newArtifact(run.ID, nodeID, attempt, name, path, mediaType, content))
+ }
++
++// clipArtifactContent 兜底裁剪超限产物：声明产物已在契约校验阶段限制，
++// 但驳回记录等内部产物也要防止把 run_artifacts.content 撑爆。
++func clipArtifactContent(name string, content []byte) []byte {
++	if len(content) <= maxArtifactBytes {
++		return content
++	}
++	note := fmt.Sprintf("\n\n> 产物 %s 超过 %d 字节上限，已截断保存。\n", name, maxArtifactBytes)
++	keep := maxArtifactBytes - len(note)
++	if keep < 0 {
++		keep = 0
++	}
++	return append(append([]byte{}, content[:keep]...), []byte(note)...)
++}
+diff --git a/internal/engine/engine.go b/internal/engine/engine.go
+index fba61b3..a96f9fd 100644
+--- a/internal/engine/engine.go
++++ b/internal/engine/engine.go
+@@ -111,6 +111,7 @@ func (e *Engine) StartMaintenance(ctx context.Context) {
+ 		go e.reclaimSandboxes()
+ 		go e.sandboxSweep(ctx)
+ 		go e.observationFlushLoop(ctx)
++		go e.zombieWatch(ctx)
+ 	})
+ }
+ 
+diff --git a/internal/engine/run_state.go b/internal/engine/run_state.go
+index 0cd2623..26e2835 100644
+--- a/internal/engine/run_state.go
++++ b/internal/engine/run_state.go
+@@ -39,6 +39,19 @@ func (e *Engine) updateRunAt(id string, allowExpiredLease bool, mutate func(*dom
+ 		mutate(&r)
+ 	}
+ 	if err := e.repo.PutRun(r); err != nil {
++		// 常见失败是单个产物超过列上限（Data too long）。先裁掉超限内容再重试一次，
++		// 避免一次写失败把整条运行永久卡在 running。
++		if shrinkOversizedArtifacts(&r) {
++			if retry := e.repo.PutRun(r); retry == nil {
++				log.Printf("put run %s: recovered after shrinking oversized artifacts (first error: %v)", id, err)
++				if current, ok := e.repo.RunStreamView(id); ok {
++					e.publishRun(current)
++				}
++				return true
++			} else {
++				log.Printf("put run %s retry after shrink: %v", id, retry)
++			}
++		}
+ 		log.Printf("put run %s: %v", id, err)
+ 		return false
+ 	}
+@@ -162,3 +175,23 @@ func (e *Engine) publishRun(current domain.Run) {
+ 		}
+ 	}
+ }
++
++// shrinkOversizedArtifacts 把超过数据库列安全上限的产物内容截断，返回是否有改动。
++// 仅用于持久化失败后的兜底重试，正常路径由产物契约校验与 appendArtifact 控制大小。
++func shrinkOversizedArtifacts(r *domain.Run) bool {
++	const safeLimit = 60000
++	changed := false
++	for i := range r.Artifacts {
++		if len(r.Artifacts[i].Content) <= safeLimit {
++			continue
++		}
++		note := "\n\n> 产物超过单次保存上限，已截断；完整内容请查看运行工作区。\n"
++		keep := safeLimit - len(note)
++		if keep < 0 {
++			keep = 0
++		}
++		r.Artifacts[i].Content = r.Artifacts[i].Content[:keep] + note
++		changed = true
++	}
++	return changed
++}
+diff --git a/internal/engine/zombie.go b/internal/engine/zombie.go
+new file mode 100644
+index 0000000..c1cd4ba
+--- /dev/null
++++ b/internal/engine/zombie.go
+@@ -0,0 +1,123 @@
++package engine
++
++import (
++	"context"
++	"fmt"
++	"log"
++	"os"
++	"strconv"
++	"strings"
++	"time"
++
++	"agentflow/internal/domain"
++)
++
++// zombieTimeout 是判定「僵尸运行」的阈值：运行状态是 running，但超过这个
++// 时间没有任何状态更新，说明执行侧已经不在动（进程丢失、写库失败等）。
++// 可用 AGENTFLOW_ZOMBIE_TIMEOUT_MIN 覆盖，单位分钟，默认 20。
++func zombieTimeout() time.Duration {
++	raw := strings.TrimSpace(os.Getenv("AGENTFLOW_ZOMBIE_TIMEOUT_MIN"))
++	if raw == "" {
++		return 20 * time.Minute
++	}
++	if raw == "0" || strings.EqualFold(raw, "off") {
++		return 0 // 关闭僵尸检测
++	}
++	n, err := strconv.Atoi(raw)
++	if err != nil || n <= 0 {
++		return 20 * time.Minute
++	}
++	return time.Duration(n) * time.Minute
++}
++
++func (e *Engine) zombieWatch(ctx context.Context) {
++	ticker := time.NewTicker(time.Minute)
++	defer ticker.Stop()
++	for {
++		select {
++		case <-ctx.Done():
++			return
++		case <-ticker.C:
++			e.detectZombieRuns()
++		}
++	}
++}
++
++// detectZombieRuns 把长时间没有状态更新的 running 运行标记为失败，
++// 避免「界面显示在跑、实际已经停了」这种静默挂死。
++func (e *Engine) detectZombieRuns() {
++	timeout := zombieTimeout()
++	if timeout <= 0 {
++		return
++	}
++	now := time.Now().UTC()
++	for _, summary := range e.repo.Runs() {
++		if summary.Status != "running" {
++			continue
++		}
++		if summary.CancelRequested || summary.PauseRequested {
++			continue
++		}
++		// 只针对「无人值守的全自动运行」：交互式工作区、群组协作、
++		// 以及任何等待人工输入的节点都不算僵尸——它们在等人，不是卡死。
++		if summary.Kind == domain.RunKindWorkspace {
++			continue
++		}
++		if summary.WorkflowSnapshot.CollaborationMode == "group" {
++			continue
++		}
++		last := summary.UpdatedAt
++		if last.IsZero() || now.Sub(last) < timeout {
++			continue
++		}
++		runID := summary.ID
++		run, ok := e.repo.RunState(runID)
++		if !ok || run.Status != "running" {
++			continue
++		}
++		interactive := false
++		for _, node := range run.Nodes {
++			if node == nil {
++				continue
++			}
++			if node.Status == "pending_input" || node.Status == "waiting_approval" {
++				interactive = true
++				break
++			}
++		}
++		if interactive {
++			continue
++		}
++		note := fmt.Sprintf("运行超过 %s 没有状态更新，判定为僵尸运行并终止（最后更新 %s，请检查执行机器与平台日志）",
++			timeout, last.UTC().Format(time.RFC3339))
++		affected := map[string]bool{}
++		for id, node := range run.Nodes {
++			if node != nil && (node.Status == "running" || node.Status == "pending_input") {
++				affected[id] = true
++			}
++		}
++		marked := e.updateRunAt(runID, false, func(r *domain.Run) {
++			if r.Status != "running" {
++				return
++			}
++			for _, node := range r.Nodes {
++				if node != nil && (node.Status == "running" || node.Status == "pending_input") {
++					node.Status = "failed"
++					node.Error = note
++					node.FinishedAt = now
++					node.Activity = ""
++				}
++			}
++			r.Status = "failed"
++			e.event(r, "", "run.zombie", note)
++		})
++		if !marked {
++			log.Printf("zombie run %s: mark failed 失败（状态未持久化），等待下次扫描", runID)
++			continue
++		}
++		log.Printf("zombie run %s: %s", runID, note)
++		if len(affected) > 0 {
++			e.cancelNodeExecutions(runID, affected)
++		}
++	}
++}
+diff --git a/internal/httpapi/assistant_native_session.go b/internal/httpapi/assistant_native_session.go
+index ac13542..32b3eb8 100644
+--- a/internal/httpapi/assistant_native_session.go
++++ b/internal/httpapi/assistant_native_session.go
+@@ -165,7 +165,7 @@ func assistantProjectScopeNote(projectID string) string {
+ 	return "\n本对话属于项目 " + projectID + "（即上面的 projectId），这就是用户当前所在的项目，不要说没有选中项目。需求、仓库、角色、SOP 等项目内资源默认写入该项目。" +
+ 		"新建项目（projects_save）是独立的顶层项目，不归属当前项目，也不会把本对话切过去；保存后让用户点卡片上的「进入项目」继续。删除项目用 projects_delete（归档，数据保留，可用 projects_restore 恢复）。" +
+ 		"你不能替用户切换本对话的项目；要到其他项目继续，请用户点对话右上角的项目名称选择目标项目（会在该项目里新开对话）。不要让用户去输入框上方找项目选择器，对话开始后那里不再显示。" + common +
+-		"你不能在工蜂上新建仓库或直接推送文件：请用户在 https://git.example.com/projects/new 建好仓库（空仓库即可）后把地址发来，再用 repositories_save 绑定；文件通过工作区写入后提交 MR，空仓库会自动初始化默认分支。"
++		"你不能在工蜂上新建仓库或直接推送文件：请用户在 http://gitlabnew.inter.wcansoft.com/projects/new 建好仓库（空仓库即可）后把地址发来，再用 repositories_save 绑定；文件通过工作区写入后提交 MR，空仓库会自动初始化默认分支。"
+ }
+ 
+ func assistantTurnContext(req assistantRequest) string {
+diff --git a/internal/httpapi/bot_interactions.go b/internal/httpapi/bot_interactions.go
+index 2687b0e..bd9be89 100644
+--- a/internal/httpapi/bot_interactions.go
++++ b/internal/httpapi/bot_interactions.go
+@@ -170,7 +170,7 @@ func (h *assistantHandlers) handleBotCardAction(ctx context.Context, bot domain.
+ 	note := "企业微信操作，平台账号：" + user.LoginName + "，发送者：" + item.SenderID
+ 	switch item.Action {
+ 	case "approve":
+-		err = h.engine.Approve(delivery.RunID, delivery.NodeID, note, expected)
++		err = h.engine.Approve(delivery.RunID, delivery.NodeID, note, engine.ApprovalActor{}, expected)
+ 	case "retry":
+ 		err = h.engine.Retry(delivery.RunID, delivery.NodeID, note, note, expected)
+ 	case "pass":
+@@ -180,7 +180,7 @@ func (h *assistantHandlers) handleBotCardAction(ctx context.Context, bot domain.
+ 	case "resume":
+ 		err = h.engine.ResumePaused(delivery.RunID, note, expected)
+ 	case "reject":
+-		err = h.engine.Reject(delivery.RunID, domain.RejectRequest{NodeID: delivery.NodeID, Reason: note}, expected)
++		err = h.engine.Reject(delivery.RunID, domain.RejectRequest{NodeID: delivery.NodeID, Reason: note}, engine.ApprovalActor{}, expected)
+ 	default:
+ 		return "此按钮已处理，请查看最新消息。", nil
+ 	}
+diff --git a/internal/httpapi/catalog.go b/internal/httpapi/catalog.go
+index a6dbf4d..0da3de4 100644
+--- a/internal/httpapi/catalog.go
++++ b/internal/httpapi/catalog.go
+@@ -210,7 +210,7 @@ func (h *catalogHandlers) repositories(c *gin.Context) {
+ 	}
+ 	if v.GongfengProjectID != "" {
+ 		if v.WebURL == "" {
+-			v.WebURL = "https://" + domain.GongfengRepoHost + "/" + v.GongfengProjectID
++			v.WebURL = "http://" + domain.GongfengRepoHost + "/" + v.GongfengProjectID
+ 		}
+ 		if v.CloneURL == "" {
+ 			v.CloneURL = v.WebURL + ".git"
+diff --git a/internal/httpapi/room_runs.go b/internal/httpapi/room_runs.go
+index 8cd03d8..dfa61d0 100644
+--- a/internal/httpapi/room_runs.go
++++ b/internal/httpapi/room_runs.go
+@@ -11,6 +11,7 @@ import (
+ 	"time"
+ 
+ 	"agentflow/internal/domain"
++	"agentflow/internal/engine"
+ 
+ 	"github.com/gin-gonic/gin"
+ )
+@@ -398,7 +399,7 @@ func (h *roomsHandlers) decide(c *gin.Context) {
+ 	var err error
+ 	body := ""
+ 	if req.Action == "approve" {
+-		err = h.engine.Approve(req.RunID, req.NodeID, req.Reason)
++		err = h.engine.Approve(req.RunID, req.NodeID, req.Reason, engine.ApprovalActor{})
+ 		body = "批准了「" + nodeName + "」"
+ 	} else {
+ 		target := roomRejectTarget(run.WorkflowSnapshot, req.NodeID)
+@@ -406,7 +407,7 @@ func (h *roomsHandlers) decide(c *gin.Context) {
+ 			c.JSON(http.StatusBadRequest, gin.H{"error": "「" + nodeName + "」前面没有可以打回的步骤，也没有配置打回目标，只能批准或到运行详情里取消"})
+ 			return
+ 		}
+-		err = h.engine.Reject(req.RunID, domain.RejectRequest{NodeID: req.NodeID, TargetID: target, Reason: req.Reason})
++		err = h.engine.Reject(req.RunID, domain.RejectRequest{NodeID: req.NodeID, TargetID: target, Reason: req.Reason}, engine.ApprovalActor{})
+ 		body = "打回了「" + nodeName + "」"
+ 	}
+ 	if err != nil {
+diff --git a/internal/repo/catalog.go b/internal/repo/catalog.go
+index 3ae2c08..99368ad 100644
+--- a/internal/repo/catalog.go
++++ b/internal/repo/catalog.go
+@@ -236,7 +236,7 @@ func BuiltInExecutors() []domain.ExecutorDefinition {
+ 	return []domain.ExecutorDefinition{
+ 		{ID: "codebuddy", Name: "CodeBuddy", Kind: "codebuddy", Binary: "codebuddy", Args: []string{"-p", "--output-format", "stream-json", "--include-partial-messages", "-y", "--setting-sources", "none"}, Protocol: "stream-json"},
+ 		{ID: "codex", Name: "Codex", Kind: "codex", Binary: "codex", Args: []string{"exec", "--json", "--sandbox", "workspace-write", "--skip-git-repo-check"}, Protocol: "jsonl"},
+-		{ID: "claude", Name: "Claude Code", Kind: "claude-code", Binary: "claude", Args: []string{"-p", "--output-format", "stream-json", "--permission-mode", "dontAsk"}, Protocol: "stream-json"},
++		{ID: "claude", Name: "Claude Code", Kind: "claude-code", Binary: "claude", Args: []string{"-p", "--verbose", "--output-format", "stream-json", "--permission-mode", "dontAsk"}, Protocol: "stream-json"},
+ 		{ID: "opencode", Name: "OpenCode", Kind: "opencode", Binary: "opencode", Protocol: "stream-json"},
+ 		{ID: "cursor", Name: "Cursor CLI", Kind: "cursor", Binary: "cursor-agent", Protocol: "stream-json"},
+ 		{ID: "agy", Name: "Antigravity", Kind: "agy", Binary: "agy", Protocol: "stream-json"},
+diff --git a/internal/repo/runners.go b/internal/repo/runners.go
+index 74e998e..08c1aa5 100644
+--- a/internal/repo/runners.go
++++ b/internal/repo/runners.go
+@@ -543,7 +543,10 @@ func (r *RunnersRepo) ClaimRunnerTask(runnerID string, providers []string, now t
+ 	var found bool
+ 	err := r.DB.Transaction(func(tx *gorm.DB) error {
+ 		var rows []runnerTaskRow
++		// 只取排序/领取所需的窄列：payload 里带着整份任务提示词（可能上百 KB），
++		// 把 payload 一起读进来会撑爆 MySQL 的 sort buffer（Error 1038）。
+ 		if err := r.locking(tx).
++			Select("id", "created_at", "attempt").
+ 			Where("status = ? AND (runner_id = '' OR runner_id = ?) AND provider IN ?", domain.RunnerTaskQueued, runnerID, allowed).
+ 			Order("created_at").Limit(1).
+ 			Find(&rows).Error; err != nil {
+@@ -730,8 +733,35 @@ func (r *RunnersRepo) ExpireRunnerTasks(now time.Time) ([]domain.RunnerTask, err
+ 			Find(&rows).Error; err != nil {
+ 			return err
+ 		}
++		// 宽限：如果租约拥有者的执行机刚刚还有心跳，说明进程还活着，
++		// 只是一次续约没赶上（长任务/网络抖动），本轮先不回收，避免误杀。
++		onlineOwners := map[string]bool{}
++		owners := make([]string, 0, len(rows))
++		for _, row := range rows {
++			if owner := strings.TrimSpace(row.LeaseOwner); owner != "" {
++				owners = append(owners, owner)
++			}
++		}
++		if len(owners) > 0 {
++			type runnerSeen struct {
++				ID         string
++				LastSeenAt *time.Time
++			}
++			var seenRows []runnerSeen
++			if err := tx.Table("runners").Select("id, last_seen_at").Where("id IN ?", owners).Scan(&seenRows).Error; err == nil {
++				grace := now.Add(-2 * time.Minute)
++				for _, r := range seenRows {
++					if r.LastSeenAt != nil && r.LastSeenAt.After(grace) {
++						onlineOwners[r.ID] = true
++					}
++				}
++			}
++		}
+ 		for _, row := range rows {
+ 			task := runnerTaskFromRow(row)
++			if onlineOwners[strings.TrimSpace(task.LeaseOwner)] {
++				continue
++			}
+ 			if task.Attempt < task.MaxAttempts {
+ 				task.Status = domain.RunnerTaskQueued
+ 			} else {
+diff --git a/internal/repo/runs.go b/internal/repo/runs.go
+index 643ad93..fb85331 100644
+--- a/internal/repo/runs.go
++++ b/internal/repo/runs.go
+@@ -366,7 +366,8 @@ func (r *RunsRepo) RunView(id string) (domain.Run, bool) {
+ 	}
+ 	timing := domain.ComputeRunTiming(run, events[run.ID], time.Now().UTC())
+ 	run.Timing = &timing
+-	if run.WorkflowSnapshot.CollaborationMode == "group" {
++	// 运行事件对所有模式都加载：驳回/批准等审计信息要靠它展示。
++	{
+ 		var rows []runEventRow
+ 		if err := r.DB.Where("run_id = ?", id).Order("seq DESC").Limit(80).Find(&rows).Error; err != nil {
+ 			return domain.Run{}, false
+diff --git a/internal/runner/task_lease.go b/internal/runner/task_lease.go
+index b22477c..31fac9a 100644
+--- a/internal/runner/task_lease.go
++++ b/internal/runner/task_lease.go
+@@ -47,6 +47,9 @@ func (d *Daemon) keepTaskLease(parent context.Context, task domain.RunnerTask, i
+ 				}
+ 			} else if err != nil && ctx.Err() == nil {
+ 				log.Printf("task %s renew lease: %v", task.ID, err)
++				if errors.Is(err, ErrTaskLeaseLost) {
++					log.Printf("task %s lease lost: platform reclaimed it; task will be reported as failed (TTL may be too short for this task)", task.ID)
++				}
+ 				if errors.Is(err, ErrUnauthorized) || errors.Is(err, ErrTaskLeaseLost) || (until != nil && !time.Now().Before(*until)) {
+ 					cancel()
+ 					return
+-- 
+2.52.0
+

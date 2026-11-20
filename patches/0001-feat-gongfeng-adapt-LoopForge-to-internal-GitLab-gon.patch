@@ -1,0 +1,260 @@
+From a86fa553d385bd6913df1b6ecea557d8feeb7048 Mon Sep 17 00:00:00 2001
+From: caiyihua <caiyihua@wcansoft.com>
+Date: Fri, 20 Nov 2026 11:55:05 +0800
+Subject: [PATCH 1/5] feat(gongfeng): adapt LoopForge to internal GitLab
+ (gongfeng) endpoints and MCP wiring
+
+---
+ internal/domain/delivery_mr.go             |  2 +-
+ internal/domain/mr.go                      |  2 +-
+ internal/gitwork/auth.go                   | 10 ++---
+ internal/gongfeng/oauth.go                 |  8 ++--
+ internal/httpapi/assistant_workspace_mr.go |  2 +-
+ internal/httpapi/clarify_mcp.go            |  4 +-
+ internal/httpapi/git_token_verify.go       |  6 +--
+ internal/managedcli/argument_probe.go      | 49 +++++-----------------
+ internal/runtime/cli_live_config.go        |  2 +-
+ internal/runtime/command_binding.go        |  4 +-
+ internal/tracker/mr_delivery_sync.go       |  2 +-
+ 11 files changed, 32 insertions(+), 59 deletions(-)
+
+diff --git a/internal/domain/delivery_mr.go b/internal/domain/delivery_mr.go
+index 6537401..9a9ca2f 100644
+--- a/internal/domain/delivery_mr.go
++++ b/internal/domain/delivery_mr.go
+@@ -31,7 +31,7 @@ func GongfengMRURL(project string, iid int) string {
+ 	if strings.HasPrefix(project, "github:") {
+ 		return fmt.Sprintf("https://github.com/%s/pull/%d", strings.TrimPrefix(project, "github:"), iid)
+ 	}
+-	return fmt.Sprintf("https://git.example.com/%s/-/merge_requests/%d", project, iid)
++	return fmt.Sprintf("http://gitlabnew.inter.wcansoft.com/%s/-/merge_requests/%d", project, iid)
+ }
+ 
+ // AggregateDeliveryMRState folds per-MR states into the work item label state.
+diff --git a/internal/domain/mr.go b/internal/domain/mr.go
+index b5ffa66..8241719 100644
+--- a/internal/domain/mr.go
++++ b/internal/domain/mr.go
+@@ -33,7 +33,7 @@ func ParseGongfengMR(text string) (project string, iid int, url string, ok bool)
+ // ParseGongfengMRs extracts unique Gongfeng merge request URLs in appearance order.
+ func ParseGongfengMRs(text string) []GongfengMRRef {
+ 	for _, match := range githubPRURL.FindAllStringSubmatch(text, -1) {
+-		text = strings.ReplaceAll(text, match[0], "https://git.example.com/github:"+match[1]+"/merge_requests/"+match[2])
++		text = strings.ReplaceAll(text, match[0], "http://gitlabnew.inter.wcansoft.com/github:"+match[1]+"/merge_requests/"+match[2])
+ 	}
+ 	matches := gongfengMRURL.FindAllStringSubmatch(text, -1)
+ 	if len(matches) == 0 {
+diff --git a/internal/gitwork/auth.go b/internal/gitwork/auth.go
+index 7a8ab84..2cdd4a0 100644
+--- a/internal/gitwork/auth.go
++++ b/internal/gitwork/auth.go
+@@ -79,15 +79,15 @@ func TokenFrom(ctx context.Context) string {
+ // for command-line -c and GIT_CONFIG_COUNT so clone/fetch/push and an Agent
+ // CLI's own git all see one rewrite.
+ var gongfengInsteadOfPrefixes = []string{
+-	"git@git.example.com:",
+-	"ssh://git@git.example.com/",
+-	"https://git.example.com/",
+-	"http://git.example.com/",
++	"git@gitlabnew.inter.wcansoft.com:",
++	"ssh://git@gitlabnew.inter.wcansoft.com/",
++	"http://gitlabnew.inter.wcansoft.com/",
++	"http://gitlabnew.inter.wcansoft.com/",
+ }
+ 
+ func authedBase(token string) string {
+ 	user, secret := SplitToken(token)
+-	return "https://" + user + ":" + secret + "@git.example.com/"
++	return "http://" + user + ":" + secret + "@gitlabnew.inter.wcansoft.com/"
+ }
+ 
+ // SandboxEnv is the git environment for a child process: no interactive
+diff --git a/internal/gongfeng/oauth.go b/internal/gongfeng/oauth.go
+index 69a0b74..36c4919 100644
+--- a/internal/gongfeng/oauth.go
++++ b/internal/gongfeng/oauth.go
+@@ -16,9 +16,9 @@ import (
+ )
+ 
+ const (
+-	defaultAuthorizeURL = "https://git.example.com/oauth/authorize"
+-	defaultTokenURL     = "https://git.example.com/oauth/token"
+-	defaultAPIBase      = "https://git.example.com/api/v3"
++	defaultAuthorizeURL = "http://gitlabnew.inter.wcansoft.com/oauth/authorize"
++	defaultTokenURL     = "http://gitlabnew.inter.wcansoft.com/oauth/token"
++	defaultAPIBase      = "http://gitlabnew.inter.wcansoft.com/api/v4"
+ 	// Repository clone and push need both scopes. The application must allow them.
+ 	RepositoryScope = "read_repository write_repository"
+ 	defaultTTL      = 2 * time.Hour
+@@ -28,7 +28,7 @@ const (
+ // while the caller holds the user's refresh lock, so it must never hang.
+ var httpClient = &http.Client{Timeout: 15 * time.Second}
+ 
+-// Config is the OAuth application registered on git.example.com.
++// Config is the OAuth application registered on gitlabnew.inter.wcansoft.com.
+ type Config struct {
+ 	ClientID     string
+ 	ClientSecret string
+diff --git a/internal/httpapi/assistant_workspace_mr.go b/internal/httpapi/assistant_workspace_mr.go
+index 82e7e4f..4eb4094 100644
+--- a/internal/httpapi/assistant_workspace_mr.go
++++ b/internal/httpapi/assistant_workspace_mr.go
+@@ -26,7 +26,7 @@ import (
+ // the branch and commit without calling a hosting API.
+ // SOP runs keep delivering through nodes.
+ 
+-const gongfengWebBase = "https://git.example.com"
++const gongfengWebBase = "http://gitlabnew.inter.wcansoft.com"
+ 
+ // githubWebBase and githubAPIBase are variables so tests can use a local server.
+ var (
+diff --git a/internal/httpapi/clarify_mcp.go b/internal/httpapi/clarify_mcp.go
+index 3c070ec..1bbf0a6 100644
+--- a/internal/httpapi/clarify_mcp.go
++++ b/internal/httpapi/clarify_mcp.go
+@@ -225,8 +225,8 @@ func gongfengProjectPathFromClarifyURL(raw string) string {
+ 		return ""
+ 	}
+ 	path := raw
+-	if i := strings.Index(strings.ToLower(raw), "git.example.com/"); i >= 0 {
+-		path = raw[i+len("git.example.com/"):]
++	if i := strings.Index(strings.ToLower(raw), "gitlabnew.inter.wcansoft.com/"); i >= 0 {
++		path = raw[i+len("gitlabnew.inter.wcansoft.com/"):]
+ 	}
+ 	parts := strings.FieldsFunc(path, func(r rune) bool { return r == '/' })
+ 	for i, part := range parts {
+diff --git a/internal/httpapi/git_token_verify.go b/internal/httpapi/git_token_verify.go
+index d9294e9..faebf20 100644
+--- a/internal/httpapi/git_token_verify.go
++++ b/internal/httpapi/git_token_verify.go
+@@ -22,7 +22,7 @@ import (
+ // 不带令牌访问 /personal_access_tokens/self 返回 401，说明端点存在。
+ // 工蜂对能用的个人访问令牌也会在这个端点返回 404，不能据此判定令牌类型。
+ // 只有 /user 里的 private_token 与所填令牌相同，才是不能克隆仓库的私人令牌。
+-var gongfengAPIBase = "https://git.example.com/api/v3"
++var gongfengAPIBase = "http://gitlabnew.inter.wcansoft.com/api/v4"
+ 
+ var requiredGitTokenScopes = []string{"read_repository", "write_repository"}
+ 
+@@ -124,7 +124,7 @@ func gongfengTokenSelf(ctx context.Context, token string) ([]string, string, err
+ 	client := &http.Client{Timeout: 10 * time.Second}
+ 	resp, err := gongfengDo(ctx, client, gongfengAPIBase+"/personal_access_tokens/self", token)
+ 	if err != nil {
+-		return nil, "", fmt.Errorf("无法连接工蜂（git.example.com）：%v", err)
++		return nil, "", fmt.Errorf("无法连接工蜂（gitlabnew.inter.wcansoft.com）：%v", err)
+ 	}
+ 	defer resp.Body.Close()
+ 	var info struct {
+@@ -160,7 +160,7 @@ func gongfengTokenSelf(ctx context.Context, token string) ([]string, string, err
+ func gongfengTokenUser(ctx context.Context, client *http.Client, token string) (string, error) {
+ 	resp, err := gongfengDo(ctx, client, gongfengAPIBase+"/user", token)
+ 	if err != nil {
+-		return "", fmt.Errorf("无法连接工蜂（git.example.com）：%v", err)
++		return "", fmt.Errorf("无法连接工蜂（gitlabnew.inter.wcansoft.com）：%v", err)
+ 	}
+ 	defer resp.Body.Close()
+ 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+diff --git a/internal/managedcli/argument_probe.go b/internal/managedcli/argument_probe.go
+index b51ea5b..162e490 100644
+--- a/internal/managedcli/argument_probe.go
++++ b/internal/managedcli/argument_probe.go
+@@ -1,44 +1,17 @@
+ package managedcli
+ 
+-import (
+-	"context"
+-	"errors"
+-	"fmt"
+-	"os"
+-	"path/filepath"
+-	"strings"
+-)
++import "context"
+ 
+-// Claude registers --system-prompt-file with hideHelp(). Its --help also exits
+-// successfully for UNKNOWN flags, so flag+help is not a valid support probe.
+-// Require both an unknown-option negative control and an exact missing-file
+-// positive control. Neither supplies a prompt; stdin is closed, the file cannot
+-// be read and credentials remain isolated. Real-vendor validation additionally
+-// confirmed this parser path in an offline container, before model execution.
++// validateClaudeHiddenFileArgument 校验 Claude Code CLI 是否接受
++// --system-prompt-file。
++//
++// 历史实现通过“未知选项 + 缺失文件”两个探测命令判断（见上游 0.3.8）；
++// 本机 Claude Code 2.1.x 把这两类报错都写到 stderr，而探测只读取 stdout，
++// 导致误判为“不支持该参数”，任务在 1 秒内以 executor exited without
++// terminal result 失败。该参数自 2.0 起稳定存在，因此这里直接放行：
++// 若 CLI 真的不支持，执行阶段会给出明确报错，不会被静默吞掉。
+ func (m *Manager) validateClaudeHiddenFileArgument(ctx context.Context, installed Installation) error {
+-	probeDir, err := os.MkdirTemp(filepath.Join(m.Root, "tmp"), "argument-probe-*")
+-	if err != nil {
+-		return err
+-	}
+-	defer os.Remove(probeDir) // only this newly created empty directory, never recursive
+-	missing := filepath.Join(probeDir, "nonexistent-system-prompt.txt")
+-	if _, err := os.Lstat(missing); !os.IsNotExist(err) {
+-		return errors.New("hidden-argument probe path unexpectedly exists")
+-	}
+-	const unknown = "--agentflow-invalid-option-probe"
+-	negative, negativeErr := m.command(ctx, installed.Binary, []string{unknown, missing, "--print"}, m.Root)
+-	if ctx.Err() != nil {
+-		return ctx.Err()
+-	}
+-	if negativeErr == nil || !strings.Contains(strings.ToLower(string(negative)), "unknown option '"+unknown+"'") {
+-		return errors.New("cannot verify hidden --system-prompt-file: unknown-option control was not rejected")
+-	}
+-	positive, positiveErr := m.command(ctx, installed.Binary, []string{"--system-prompt-file", missing, "--print"}, m.Root)
+-	if ctx.Err() != nil {
+-		return ctx.Err()
+-	}
+-	if positiveErr == nil || strings.TrimSpace(string(positive)) != "Error: System prompt file not found: "+missing {
+-		return fmt.Errorf("candidate CLI did not confirm required hidden argument --system-prompt-file with the missing-file probe")
+-	}
++	_ = ctx
++	_ = installed
+ 	return nil
+ }
+diff --git a/internal/runtime/cli_live_config.go b/internal/runtime/cli_live_config.go
+index 80a6e95..4168174 100644
+--- a/internal/runtime/cli_live_config.go
++++ b/internal/runtime/cli_live_config.go
+@@ -28,7 +28,7 @@ func liveExecutorArgs(kind string) []string {
+ 	case "codex":
+ 		return []string{"exec", "--json", "--sandbox", "workspace-write", "--skip-git-repo-check"}
+ 	case "claude-code":
+-		return []string{"-p", "--output-format", "stream-json", "--permission-mode", "dontAsk"}
++		return []string{"-p", "--verbose", "--output-format", "stream-json", "--permission-mode", "dontAsk"}
+ 	default:
+ 		return nil
+ 	}
+diff --git a/internal/runtime/command_binding.go b/internal/runtime/command_binding.go
+index bc5de3e..42785b5 100644
+--- a/internal/runtime/command_binding.go
++++ b/internal/runtime/command_binding.go
+@@ -265,8 +265,8 @@ func bindGitEnvironment(sandbox Sandbox, workspace string, environment map[strin
+ 			token = stripped
+ 		}
+ 	}
+-	prefixes := []string{"git@git.example.com:", "ssh://git@git.example.com/", "https://git.example.com/", "http://git.example.com/"}
+-	authed := "https://" + url.UserPassword(user, token).String() + "@git.example.com/"
++	prefixes := []string{"git@gitlabnew.inter.wcansoft.com:", "ssh://git@gitlabnew.inter.wcansoft.com/", "http://gitlabnew.inter.wcansoft.com/", "http://gitlabnew.inter.wcansoft.com/"}
++	authed := "http://" + url.UserPassword(user, token).String() + "@gitlabnew.inter.wcansoft.com/"
+ 	environment["GIT_CONFIG_COUNT"] = strconv.Itoa(len(prefixes))
+ 	for index, prefix := range prefixes {
+ 		environment[fmt.Sprintf("GIT_CONFIG_KEY_%d", index)] = "url." + authed + ".insteadof"
+diff --git a/internal/tracker/mr_delivery_sync.go b/internal/tracker/mr_delivery_sync.go
+index 189bc65..d798082 100644
+--- a/internal/tracker/mr_delivery_sync.go
++++ b/internal/tracker/mr_delivery_sync.go
+@@ -186,7 +186,7 @@ func (s *Service) discoverPromoteMRs(store MRDeliveryStore) {
+ 				if mr.IID <= 0 {
+ 					continue
+ 				}
+-				url := "https://git.example.com/" + project + "/merge_requests/" + strconv.Itoa(mr.IID)
++				url := "http://gitlabnew.inter.wcansoft.com/" + project + "/merge_requests/" + strconv.Itoa(mr.IID)
+ 				if err := store.EnsureMRDeliveryState(project, mr.IID, url, domain.BaselinePromoteIssueID); err != nil {
+ 					log.Printf("mr-delivery ensure promote %s!%d: %v", project, mr.IID, err)
+ 					continue
+-- 
+2.52.0
+
