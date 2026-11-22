@@ -38,6 +38,7 @@ func (d *Daemon) executeInteractiveInvocation(ctx context.Context, task domain.R
 	// 把宿主机 ~/.claude/settings.json 带进私有配置目录：
 	// 否则 CLAUDE_CONFIG_DIR 指向空目录时，CLI 会走默认联网检查并连 api.anthropic.com。
 	prepareInteractiveClaudeConfig(workspace, env)
+	acceptInteractiveClaudePrompts(workspace, env)
 	prompt = prompt + "\n\n## 工作区说明\n\n本交互会话**未预克隆任何代码仓库**。请根据领域知识判断涉及哪些微服务，自行用 git clone 拉取需要的仓库（Git 凭据已注入会话环境，可直接 clone 内网 GitLab 地址）。完成时平台会扫描工作区里所有 git 仓库并生成变更报告。\n"
 	if err := os.WriteFile(filepath.Join(dir, "task.md"), []byte(prompt), 0o644); err != nil {
 		return execResult{status: domain.RunnerTaskFailed, errMsg: fmt.Sprintf("write task prompt: %v", err)}
@@ -183,7 +184,7 @@ func splitInteractiveArgv(argv []string) (string, []string) {
 	if len(out) == 0 {
 		out = []string{"claude"}
 	}
-	out = append(out, "请先阅读 .agentflow/interactive/task.md 中的任务书，然后开始工作。完成或需要确认时告诉我。注意：你不要自己执行 lf-session submit，提交必须由人工在终端确认后完成。")
+	out = append(out, "请先阅读 .agentflow/interactive/task.md 了解任务背景。在我说「开始」之前，不要调用任何工具、不要修改文件，只回复你已了解任务并等待我的指示。")
 	return prompt, out
 }
 
@@ -284,6 +285,53 @@ func prepareInteractiveClaudeConfig(workspace string, env map[string]string) {
 		return
 	}
 	_ = os.WriteFile(target, data, 0o600)
+}
+
+// acceptInteractiveClaudePrompts 预先接受信任目录与危险模式确认，
+// 避免每个会话重复弹三个选择框。
+func acceptInteractiveClaudePrompts(workspace string, env map[string]string) {
+	home, err := os.UserHomeDir()
+	if err != nil || home == "" {
+		return
+	}
+	// 1) settings.json：跳过危险模式确认
+	cfgDir := strings.TrimSpace(env["CLAUDE_CONFIG_DIR"])
+	if cfgDir == "" {
+		cfgDir = filepath.Join(home, ".claude")
+	}
+	settingsPath := filepath.Join(cfgDir, "settings.json")
+	settings := map[string]any{}
+	if data, err := os.ReadFile(settingsPath); err == nil {
+		_ = json.Unmarshal(data, &settings)
+	}
+	if settings["skipDangerousModePermissionPrompt"] != true {
+		settings["skipDangerousModePermissionPrompt"] = true
+		if data, err := json.MarshalIndent(settings, "", "  "); err == nil {
+			_ = os.MkdirAll(cfgDir, 0o700)
+			_ = os.WriteFile(settingsPath, data, 0o600)
+		}
+	}
+	// 2) .claude.json：信任当前工作区
+	statePath := filepath.Join(home, ".claude.json")
+	state := map[string]any{}
+	if data, err := os.ReadFile(statePath); err == nil {
+		_ = json.Unmarshal(data, &state)
+	}
+	projects, _ := state["projects"].(map[string]any)
+	if projects == nil {
+		projects = map[string]any{}
+	}
+	entry, _ := projects[workspace].(map[string]any)
+	if entry == nil {
+		entry = map[string]any{}
+	}
+	entry["hasTrustDialogAccepted"] = true
+	entry["hasCompletedProjectOnboarding"] = true
+	projects[workspace] = entry
+	state["projects"] = projects
+	if data, err := json.MarshalIndent(state, "", "  "); err == nil {
+		_ = os.WriteFile(statePath, data, 0o600)
+	}
 }
 
 // writeInteractiveRepoReport 扫描工作区里所有 git 仓库，记录仓库、分支、
