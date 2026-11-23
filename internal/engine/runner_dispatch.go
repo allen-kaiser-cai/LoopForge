@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -180,7 +181,8 @@ func (e *Engine) dispatchRunnerTask(ctx context.Context, runnerID string, run do
 		return "", err
 	}
 	runner, runnerOK := e.repo.Runner(runnerID)
-	if err := e.preflightRunnerExecution(ctx, runner, runnerOK, ex, run.ExecutionContext.ResponsibleUserID); err != nil {
+	allowOffline := strings.EqualFold(strings.TrimSpace(run.WorkflowSnapshot.ExecutionTarget), "personal")
+	if err := e.preflightRunnerExecution(ctx, runner, runnerOK, ex, run.ExecutionContext.ResponsibleUserID, allowOffline); err != nil {
 		return "", err
 	}
 	authMode := runner.RuntimeAuthMode(ex.Kind)
@@ -901,7 +903,7 @@ func restoreRunnerArtifacts(sandboxWorkspace string, contracts []domain.Artifact
 
 // preflightRunnerExecution 在真正下发任务前做执行机自检，避免任务派到一台
 // 在线但缺少 CLI / 凭据的机器上，跑一半才失败。
-func (e *Engine) preflightRunnerExecution(ctx context.Context, runner domain.Runner, runnerOK bool, ex domain.ExecutorDefinition, userID int64) error {
+func (e *Engine) preflightRunnerExecution(ctx context.Context, runner domain.Runner, runnerOK bool, ex domain.ExecutorDefinition, userID int64, allowOffline bool) error {
 	if !runnerOK {
 		return fmt.Errorf("执行机不存在或已注销，请重新绑定（任务未下发）")
 	}
@@ -914,7 +916,13 @@ func (e *Engine) preflightRunnerExecution(ctx context.Context, runner domain.Run
 		if runner.LastSeenAt != nil {
 			seen = runner.LastSeenAt.Local().Format("2006-01-02 15:04:05")
 		}
-		return fmt.Errorf("执行机「%s」已离线（最后心跳：%s）。请先启动该机器上的 Runner 或改用其他执行机", name, seen)
+		if allowOffline {
+			// 个人开发机场景：机器离线不应让流程失败。任务入队等待，
+			// Runner 重新上线后自动领取执行。
+			log.Printf("执行机「%s」离线（最后心跳：%s），个人目标允许排队等待", name, seen)
+		} else {
+			return fmt.Errorf("执行机「%s」已离线（最后心跳：%s）。请先启动该机器上的 Runner 或改用其他执行机", name, seen)
+		}
 	}
 	if ex.Kind != "" && !domain.IsAgentCLIKind(ex.Kind) {
 		found := false
@@ -934,11 +942,15 @@ func (e *Engine) preflightRunnerExecution(ctx context.Context, runner domain.Run
 			return fmt.Errorf("执行机「%s」上的 %s 当前不可用（未登录或被禁用），请先在终端确认 CLI 可用", name, ex.Name)
 		}
 	}
-	if strings.TrimSpace(e.repo.GitCredential(ctx, userID)) == "" {
+	credentialUserID := userID
+	if e.isCloudPoolRunner(runner) {
+		credentialUserID = cloudServiceUserID()
+	}
+	if strings.TrimSpace(e.repo.GitCredential(ctx, credentialUserID)) == "" {
 		return fmt.Errorf("责任人未配置 Git 令牌，无法拉取仓库。请在「个人配置 → 代码托管」配置 GitLab 访问令牌后重试")
 	}
 	if runner.RuntimeAuthMode(ex.Kind) == domain.RuntimeAuthPersonal {
-		user, ok := e.repo.User(userID)
+		user, ok := e.repo.User(credentialUserID)
 		if ok {
 			switch ex.Kind {
 			case "claude-code":

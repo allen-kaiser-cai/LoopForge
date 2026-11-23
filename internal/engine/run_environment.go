@@ -225,6 +225,9 @@ func (e *Engine) acquireRunEnvironment(ctx context.Context, run domain.Run, prof
 
 func (e *Engine) resolveRunCredentials(run domain.Run) runtime.RunCredentials {
 	userID := run.ExecutionContext.ResponsibleUserID
+	if e.isCloudPoolRun(run) {
+		userID = cloudServiceUserID()
+	}
 	credentials := runtime.RunCredentials{
 		CodeBuddy: resolveCodeBuddyCredential(e.repo, userID),
 		GitToken:  resolveGitToken(e.repo, userID),
