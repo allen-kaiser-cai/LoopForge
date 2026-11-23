@@ -177,11 +177,11 @@ func (e *Engine) dispatchRunnerTask(ctx context.Context, runnerID string, run do
 	if err := e.requireWorkBranchCapabilities(runnerID, run.RepositoryContexts()); err != nil {
 		return "", err
 	}
-	if err := e.requireRunnerProvider(runnerID, ex.Kind); err != nil {
+	allowOffline := strings.EqualFold(strings.TrimSpace(run.WorkflowSnapshot.ExecutionTarget), "personal")
+	if err := e.requireRunnerProvider(runnerID, ex.Kind, allowOffline); err != nil {
 		return "", err
 	}
 	runner, runnerOK := e.repo.Runner(runnerID)
-	allowOffline := strings.EqualFold(strings.TrimSpace(run.WorkflowSnapshot.ExecutionTarget), "personal")
 	if err := e.preflightRunnerExecution(ctx, runner, runnerOK, ex, run.ExecutionContext.ResponsibleUserID, allowOffline); err != nil {
 		return "", err
 	}
@@ -398,7 +398,8 @@ func (e *Engine) dispatchRunnerScript(ctx context.Context, runnerID string, run 
 	if err := e.requireWorkBranchCapabilities(runnerID, run.RepositoryContexts()); err != nil {
 		return "", err
 	}
-	if err := e.requireRunnerProvider(runnerID, "terminal"); err != nil {
+	allowOffline := strings.EqualFold(strings.TrimSpace(run.WorkflowSnapshot.ExecutionTarget), "personal")
+	if err := e.requireRunnerProvider(runnerID, "terminal", allowOffline); err != nil {
 		return "", err
 	}
 	command := script
@@ -860,12 +861,17 @@ func bridgeRunnerEventsToSink(task domain.RunnerTask, events []domain.RunnerTask
 // requireRunnerProvider validates that the bound runner is online and has the
 // executor's CLI enabled, so a misbound role fails fast with a clear message
 // instead of queueing a task nobody can claim.
-func (e *Engine) requireRunnerProvider(runnerID, provider string) error {
+func (e *Engine) requireRunnerProvider(runnerID, provider string, allowOffline bool) error {
 	runner, ok := e.repo.Runner(strings.TrimSpace(runnerID))
 	if !ok {
 		return fmt.Errorf("执行器 %s 不存在：请到「个人 → 执行器」页面重新绑定", runnerID)
 	}
 	if runner.Status != domain.RunnerStatusOnline {
+		if allowOffline {
+			// 个人开发机允许离线：任务入队，Runner 上线后自动领取。
+			log.Printf("执行器 %s（%s）离线，个人目标任务排队等待 %s", runnerID, runner.Name, provider)
+			return nil
+		}
 		return fmt.Errorf("执行器 %s（%s）当前离线，无法路由 %s 任务", runnerID, runner.Name, provider)
 	}
 	if !runner.SupportsProvider(provider) {
@@ -924,7 +930,7 @@ func (e *Engine) preflightRunnerExecution(ctx context.Context, runner domain.Run
 			return fmt.Errorf("执行机「%s」已离线（最后心跳：%s）。请先启动该机器上的 Runner 或改用其他执行机", name, seen)
 		}
 	}
-	if ex.Kind != "" && !domain.IsAgentCLIKind(ex.Kind) {
+	if ex.Kind != "" && !domain.IsAgentCLIKind(ex.Kind) && !allowOffline {
 		found := false
 		online := false
 		for _, rt := range runner.Runtimes {
