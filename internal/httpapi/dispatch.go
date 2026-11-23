@@ -45,7 +45,9 @@ func dispatchIssue(d *deps, req dispatchRequest) (domain.Task, error) {
 		}
 	}
 	runUserID := responsible.ID
-	if req.TriggerUserID > 0 {
+	// 工作项责任人优先：管理员/系统代派时不要把运行责任人改成触发人，
+	// 否则开发分支名和执行机都会按触发人计算。
+	if runUserID == 0 && req.TriggerUserID > 0 {
 		if user, ok := d.repo.User(req.TriggerUserID); ok && user.ID > 0 {
 			runUserID = user.ID
 		}

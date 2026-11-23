@@ -10,6 +10,35 @@ SUFFIX = os.environ.get("LF_CHAIN_SUFFIX", "")  # 空=生产版，"-weekend"=周
 CLARIFY = "ssp-bug-clarify" + SUFFIX
 DEV = "ssp-bug-dev-v2"
 RELEASE = "ssp-bug-release-v2" + SUFFIX
+# 发布段按 bug 类型分流：前端 bug 走前端审批人，后端 bug 走项目组长
+RELEASE_FE = {
+    "ssp": "ssp-bug-release-fe",
+    "erp": "erp-bug-release-fe",
+}
+PROJECT_FLOWS = {
+    "ssp": {"clarify": "ssp-bug-clarify", "dev": "ssp-bug-dev-v2",
+            "release": "ssp-bug-release-v2", "release_fe": "ssp-bug-release-fe"},
+    "erp": {"clarify": "erp-bug-clarify", "dev": "erp-bug-dev-v2",
+            "release": "erp-bug-release", "release_fe": "erp-bug-release-fe"},
+    "platform": {"clarify": "platform-bug-clarify", "dev": "platform-bug-dev-v2",
+                 "release": "platform-bug-release-v2", "release_fe": "platform-bug-release-fe"},
+    "robot": {"clarify": "robot-bug-clarify", "dev": "robot-bug-dev-v2",
+              "release": "robot-bug-release-v2", "release_fe": "robot-bug-release-fe"},
+}
+
+def flows_for(issue):
+    pid = str(issue.get("projectId") or "ssp")
+    return PROJECT_FLOWS.get(pid, PROJECT_FLOWS["ssp"])
+
+FRONTEND_KEYWORDS = ("前端", "页面", "按钮", "样式", "显示", "白屏", "弹窗", "输入框", "小程序", "H5", "布局")
+
+def is_frontend_issue(issue):
+    text = " ".join([str(issue.get("title") or ""), str(issue.get("description") or "")])
+    return any(k.lower() in text.lower() for k in FRONTEND_KEYWORDS)
+
+def release_workflow(issue):
+    f = flows_for(issue)
+    return f["release_fe"] if is_frontend_issue(issue) else f["release"]
 
 def api(path, method="GET", body=None):
     req = urllib.request.Request(BASE + path, method=method,
@@ -123,6 +152,56 @@ def is_rework_failure(run_id):
             return True
     return False
 
+
+
+def ding_alert(text, logins=("caiyihua",)):
+    """向指定责任人发钉钉告警（复用 lf-notify 的应用凭据）。"""
+    try:
+        import urllib.parse
+        env = {}
+        for line in open("/opt/lf-notify/env"):
+            line = line.strip()
+            if "=" in line and not line.startswith("#"):
+                k, v = line.split("=", 1)
+                env[k] = v
+        appkey, secret = env.get("DING_APPKEY", ""), env.get("DING_APPSECRET", "")
+        if not (appkey and secret):
+            print("ding_alert skipped: no appkey"); return
+        users = json.load(open("/opt/lf-notify/ding-users.json"))
+        ids = ",".join(users[l] for l in logins if users.get(l))
+        if not ids:
+            print("ding_alert skipped: no ding user"); return
+        tok = json.loads(urllib.request.urlopen(urllib.request.Request(
+            f"https://oapi.dingtalk.com/gettoken?appkey={appkey}&appsecret={secret}")).read())["access_token"]
+        body = json.dumps({"agent_id": appkey,
+                           "msg": {"msgtype": "markdown",
+                                   "markdown": {"title": "LoopForge 流程需要人工处理", "text": text}},
+                           "to_all_user": False, "userid_list": ids}).encode()
+        urllib.request.urlopen(urllib.request.Request(
+            f"https://oapi.dingtalk.com/topapi/message/corpconversation/asyncsend_v2?access_token={tok}",
+            data=body, headers={"Content-Type": "application/json"}))
+        print("ding_alert sent:", logins)
+    except Exception as e:
+        print("ding_alert error:", e)
+
+def failed_node_of(run_id):
+    st, run = api(f"/api/runs/{run_id}")
+    if st != 200:
+        return "", "", ""
+    for nid, node in (run.get("nodes") or {}).items():
+        if isinstance(node, dict) and node.get("status") == "failed":
+            return nid, (node.get("error") or "")[:800], (node.get("output") or "")[:400]
+    return "", "", ""
+
+def _set_issue_workflow(issue_id, issue, workflow_id):
+    body = {"id": issue_id, "projectId": issue.get("projectId"), "title": issue.get("title"),
+            "description": issue.get("description"), "status": "open",
+            "priority": issue.get("priority") or "high", "workflowId": workflow_id,
+            "assigneeUserId": issue.get("assigneeUserId") or 1,
+            "branchLine": issue.get("branchLine") or "standard",
+            "repositoryIds": issue.get("repositoryIds") or []}
+    api("/api/issues", "PUT", body)
+
 def rework_to_clarify(issue_id, run_id):
     """开发段被打回（设计发现需求不清）→ 把返工原因写回工作项并重跑澄清段。"""
     st, run = api(f"/api/runs/{run_id}")
@@ -144,11 +223,11 @@ def rework_to_clarify(issue_id, run_id):
             desc += block
     body = {"id": issue_id, "projectId": issue.get("projectId"), "title": issue.get("title"),
             "description": desc, "status": "open", "priority": issue.get("priority") or "high",
-            "workflowId": CLARIFY, "assigneeUserId": issue.get("assigneeUserId") or 1,
+            "workflowId": flows_for(issue)["clarify"], "assigneeUserId": issue.get("assigneeUserId") or 1,
             "branchLine": issue.get("branchLine") or "standard",
             "repositoryIds": issue.get("repositoryIds") or []}
     api("/api/issues", "PUT", body)
-    return dispatch(issue_id, CLARIFY)
+    return dispatch(issue_id, flows_for(issue)["clarify"])
 
 def main():
     state = load_state()
@@ -164,24 +243,37 @@ def main():
         st2, ires = api(f"/api/issues/{issue_id}")
         issue = (ires.get("issue") or ires) if st2 == 200 else {}
         cur_wf = issue.get("workflowId")
-        if status == "succeeded" and wf == CLARIFY and cur_wf == CLARIFY:
+        flows = flows_for(issue)
+        if status == "succeeded" and wf == flows["clarify"]:
             inject_evidence_node(issue_id, issue.get("title"))
             apply_candidate_repos(issue_id, issue)
-            st3, _ = dispatch(issue_id, DEV)
-            print("chain clarify->dev", issue_id, st3)
-        elif status == "succeeded" and wf == DEV and cur_wf == DEV:
-            st3, _ = dispatch(issue_id, RELEASE)
+            st3, _ = dispatch(issue_id, flows["dev"])
+            print("chain clarify->dev", issue_id, flows["dev"], st3)
+        elif status == "succeeded" and wf == flows["dev"]:
+            rel = release_workflow(issue)
+            _set_issue_workflow(issue_id, issue, rel)
+            print("release workflow:", rel, "frontend=", is_frontend_issue(issue))
+            st3, _ = dispatch(issue_id, rel)
             print("chain dev->release", issue_id, st3)
-        elif status == "failed" and wf == DEV and cur_wf == DEV:
+        elif status == "failed" and wf == flows["dev"]:
             if is_rework_failure(rid):
                 st3, _ = rework_to_clarify(issue_id, rid)
                 print("chain dev->clarify (rework)", issue_id, st3)
             else:
-                st3, _ = dispatch(issue_id, DEV)
+                st3, _ = dispatch(issue_id, flows["dev"])
                 print("chain dev retry (non-rework failure)", issue_id, st3)
-        elif status == "failed" and wf == RELEASE and cur_wf == RELEASE:
-            st3, _ = dispatch(issue_id, DEV)
-            print("chain release->dev (rework)", issue_id, st3)
+        elif status == "failed" and wf in (flows["release"], flows["release_fe"]):
+            node_id, node_err, _ = failed_node_of(rid)
+            if node_id in ("mr_test", "deliver", "sonar"):
+                # 合并/MR/扫描失败属于环境或代码冲突，交给人工处理，不重跑开发
+                text = (f"### LoopForge 流程需要人工处理\n\n工作项：{issue_id}\n\n运行：{rid}\n\n"
+                        f"失败节点：{node_id}\n\n错误：{node_err[:500]}\n\n"
+                        f"处理建议：请人工检查测试分支合并冲突/MR 状态，解决后在平台重试发布段。")
+                ding_alert(text, logins=("caiyihua",))
+                print("chain alert human (release node)", issue_id, node_id)
+            else:
+                st3, _ = dispatch(issue_id, flows["dev"])
+                print("chain release->dev (rework)", issue_id, node_id, st3)
         state[key] = int(time.time())
         save_state(state)
 
