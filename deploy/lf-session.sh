@@ -27,8 +27,8 @@ case "${1:-}" in
       echo "提交必须在交互式终端中进行（Agent 没有 TTY，不允许代提交）" >&2
       exit 1
     fi
-    shift; dec=""; note=""
-    while [ $# -gt 0 ]; do case "$1" in --decision) dec="${2:-}"; shift 2;; --note) note="${2:-}"; shift 2;; *) shift;; esac; done
+    shift; dec=""; note=""; target=""
+    while [ $# -gt 0 ]; do case "$1" in --decision) dec="${2:-}"; shift 2;; --note) note="${2:-}"; shift 2;; --target) target="${2:-}"; shift 2;; *) shift;; esac; done
     ws=$(find_ws)
     if [ -z "$ws" ]; then echo "未找到交互工作区（.agentflow/interactive），请 cd 到 ~/.agentflow-runner/workspace/runs/<runId>/workspace 后重试" >&2; exit 1; fi
     if [ -z "$dec" ]; then
@@ -42,7 +42,7 @@ import json,os,sys
 ws,dec,note=sys.argv[1],sys.argv[2],sys.argv[3]
 path=os.path.join(ws,'.agentflow','interactive','submit.json')
 os.makedirs(os.path.dirname(path),exist_ok=True)
-json.dump({"decision":dec,"note":note},open(path,'w',encoding='utf-8'),ensure_ascii=False)
+json.dump({"decision":dec,"note":note,"target":target},open(path,'w',encoding='utf-8'),ensure_ascii=False)
 print(f"已提交：{path}  decision={dec}")
 PY
     ;;

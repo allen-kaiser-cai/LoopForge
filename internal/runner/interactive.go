@@ -17,6 +17,8 @@ import (
 type interactiveSubmit struct {
 	Decision string `json:"decision"`
 	Note     string `json:"note,omitempty"`
+	// Target 为 rework 时的改派目标（目前支持 frontend）。
+	Target string `json:"target,omitempty"`
 }
 
 // executeInteractiveInvocation 在 tmux 会话里以交互方式启动 Agent CLI，
@@ -151,6 +153,10 @@ func (d *Daemon) executeInteractiveInvocation(ctx context.Context, task domain.R
 		reason = "人工在交互会话中提交"
 	}
 	gate := map[string]any{"decision": decision, "reason": reason, "summary": reason, "findings": []any{}}
+	if target := strings.ToLower(strings.TrimSpace(submitted.Target)); target != "" {
+		gate["target"] = target
+		reason = strings.TrimSpace(reason) + " [改派:" + target + "]"
+	}
 	if path := strings.TrimSpace(inv.GateResultPath); path != "" {
 		target := path
 		if !filepath.IsAbs(target) {
@@ -162,7 +168,11 @@ func (d *Daemon) executeInteractiveInvocation(ctx context.Context, task domain.R
 		}
 	}
 	if decision == "rework" {
-		return execResult{status: domain.RunnerTaskSuccess, exitCode: 0, result: "人工提交：需要返工（" + reason + "）"}
+		marker := ""
+		if target := strings.ToLower(strings.TrimSpace(submitted.Target)); target != "" {
+			marker = " REASSIGN:" + target
+		}
+		return execResult{status: domain.RunnerTaskSuccess, exitCode: 0, result: "人工提交：需要返工（" + reason + "）" + marker}
 	}
 	return execResult{status: domain.RunnerTaskSuccess, exitCode: 0, result: "人工提交：通过（" + reason + "）"}
 }

@@ -762,7 +762,21 @@ func (r *RunnersRepo) ExpireRunnerTasks(now time.Time) ([]domain.RunnerTask, err
 			if onlineOwners[strings.TrimSpace(task.LeaseOwner)] {
 				continue
 			}
-			if task.Attempt < task.MaxAttempts {
+			personal := false
+			if task.Invocation != nil && strings.TrimSpace(task.Invocation.RunID) != "" {
+				var snapshot string
+				if err := tx.Table("runs").Select("snapshot").Where("id = ?", task.Invocation.RunID).Scan(&snapshot).Error; err == nil {
+					personal = strings.Contains(snapshot, "\"executionTarget\":\"personal\"")
+				}
+			}
+			if personal {
+				// 个人开发机允许离线/休眠：租约过期不失败，重新入队等 Runner 上线后继续。
+				task.Status = domain.RunnerTaskQueued
+				task.Error = ""
+				if task.MaxAttempts <= task.Attempt {
+					task.MaxAttempts = task.Attempt + 3
+				}
+			} else if task.Attempt < task.MaxAttempts {
 				task.Status = domain.RunnerTaskQueued
 			} else {
 				task.Status = domain.RunnerTaskFailed
