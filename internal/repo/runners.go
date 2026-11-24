@@ -766,7 +766,12 @@ func (r *RunnersRepo) ExpireRunnerTasks(now time.Time) ([]domain.RunnerTask, err
 			if task.Invocation != nil && strings.TrimSpace(task.Invocation.RunID) != "" {
 				var snapshot string
 				if err := tx.Table("runs").Select("snapshot").Where("id = ?", task.Invocation.RunID).Scan(&snapshot).Error; err == nil {
-					personal = strings.Contains(snapshot, "\"executionTarget\":\"personal\"")
+					var snap struct {
+						ExecutionTarget string `json:"executionTarget"`
+					}
+					if json.Unmarshal([]byte(snapshot), &snap) == nil {
+						personal = strings.EqualFold(strings.TrimSpace(snap.ExecutionTarget), "personal")
+					}
 				}
 			}
 			if personal {
