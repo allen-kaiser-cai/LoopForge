@@ -178,6 +178,7 @@ func (e *Engine) dispatchRunnerTask(ctx context.Context, runnerID string, run do
 		return "", err
 	}
 	allowOffline := strings.EqualFold(strings.TrimSpace(run.WorkflowSnapshot.ExecutionTarget), "personal")
+	ex = e.resolveExecutorForRun(run, ex)
 	if err := e.requireRunnerProvider(runnerID, ex.Kind, allowOffline); err != nil {
 		return "", err
 	}
