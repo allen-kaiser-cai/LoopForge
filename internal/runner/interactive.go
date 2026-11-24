@@ -71,6 +71,13 @@ func (d *Daemon) executeInteractiveInvocation(ctx context.Context, task domain.R
 		return execResult{status: domain.RunnerTaskFailed, errMsg: fmt.Sprintf("tmux start: %v %s", err, strings.TrimSpace(string(out)))}
 	}
 	_ = exec.Command("tmux", "pipe-pane", "-t", session, "-o", "cat >> "+shellQuote(logPath)).Run()
+	// 会话已就绪：立即上报一次，让平台把“准备工作区/沙箱”更新为“等待人工操作”。
+	readyBatcher := newEventBatcher(task, d.client)
+	readyBatcher.addObservation(domain.TelemetryEvent{
+		Category: "process", Name: "interactive.ready", Phase: "progress", Level: "info",
+		Message: "交互会话已就绪，等待人工操作：tmux attach -t " + session,
+	})
+	readyBatcher.flush(ctx)
 	// 等待人工提交：24 小时无动作仅记录提醒，48 小时自动失败。
 	submitPath := filepath.Join(dir, "submit.json")
 	deadline := time.Now().Add(48 * time.Hour)
@@ -101,16 +108,29 @@ func (d *Daemon) executeInteractiveInvocation(ctx context.Context, task domain.R
 		if exec.Command("tmux", "has-session", "-t", session).Run() != nil {
 			if sessionGoneAt.IsZero() {
 				sessionGoneAt = time.Now()
-			} else if time.Since(sessionGoneAt) > 5*time.Minute {
+				batcher.addObservation(domain.TelemetryEvent{
+					Category: "process", Name: "interactive.detached", Phase: "progress", Level: "info",
+					Message: "交互会话已退出，仍在等待人工提交（开发者可稍后继续）",
+				})
+				batcher.flush(ctx)
+			}
+			if time.Since(sessionGoneAt) > 12*time.Hour {
 				tail := tailFile(filepath.Join(dir, "session.log"), 2000)
-				return execResult{status: domain.RunnerTaskFailed, errMsg: "交互会话已退出且未提交。会话日志尾部：\n" + tail}
+				return execResult{status: domain.RunnerTaskFailed, errMsg: "交互会话退出后 12 小时仍未提交。会话日志尾部：\n" + tail}
 			}
 		} else {
 			sessionGoneAt = time.Time{}
 		}
-		if time.Since(lastBeat) >= 60*time.Second {
-			batcher.addLine("system", "交互会话进行中，等待人工提交")
-			// 心跳失败不终止会话，保持人的工作不中断
+		if time.Since(lastBeat) >= 30*time.Second {
+			// 续租 + 事件双通道：续租保证平台租约不过期，
+			// 事件保证平台节点活动状态实时刷新。
+			if _, err := d.client.RenewLease(ctx, task.ID); err != nil {
+				_ = err
+			}
+			batcher.addObservation(domain.TelemetryEvent{
+				Category: "process", Name: "interactive.waiting", Phase: "progress", Level: "info",
+				Message: "交互会话进行中：tmux attach -t " + session + "（等待人工提交）",
+			})
 			batcher.flush(ctx)
 			lastBeat = time.Now()
 		}
@@ -175,6 +195,14 @@ func splitInteractiveArgv(argv []string) (string, []string) {
 		case "--input-format":
 			i++
 			continue
+		case "--mode":
+			// Pi 的 --mode json 是无人值守输出模式，交互会话要去掉。
+			i++
+			continue
+		case "--session-id":
+			// 交互会话使用 tmux 里的原生会话，不再复用 headless 会话 ID。
+			i++
+			continue
 		}
 		if strings.HasPrefix(a, "--output-format=") || strings.HasPrefix(a, "--input-format=") {
 			continue
@@ -184,6 +212,7 @@ func splitInteractiveArgv(argv []string) (string, []string) {
 	if len(out) == 0 {
 		out = []string{"claude"}
 	}
+	// Pi 的原始 argv 没有子命令（pi --model ...），去掉 headless 参数后即可交互运行。
 	out = append(out, "请先阅读 .agentflow/interactive/task.md 了解任务背景。在我说「开始」之前，不要调用任何工具、不要修改文件，只回复你已了解任务并等待我的指示。")
 	return prompt, out
 }
@@ -225,7 +254,8 @@ func copyTruncatedLog(src, dst string, limit int64) {
 
 // interactiveEnvKeys 选出需要带进交互会话的环境变量（模型凭据与仓库访问）。
 func interactiveEnvKeys(env map[string]string) []string {
-	prefixes := []string{"ANTHROPIC_", "OPENAI_", "CODEX_", "CLAUDE_", "AGENTFLOW_", "GIT_", "PATH"}
+	prefixes := []string{"ANTHROPIC_", "OPENAI_", "CODEX_", "CLAUDE_", "AGENTFLOW_", "GIT_", "PATH",
+		"PI_", "DEEPSEEK_", "KIMI_", "OPENCODE_", "CURSOR_", "AGY_", "ZCODE_", "DSH_"}
 	out := make([]string, 0, len(env))
 	for k, v := range env {
 		if strings.TrimSpace(v) == "" {

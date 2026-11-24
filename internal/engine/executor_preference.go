@@ -41,14 +41,15 @@ func (e *Engine) resolveExecutorForRun(run domain.Run, fallback domain.ExecutorD
 		if !strings.EqualFold(def.Kind, fallback.Kind) && !runner.SupportsProvider(def.Kind) {
 			continue
 		}
-		// 平台凭据模式下，账号未配置该 CLI 的 Key 时视为不可用，继续回退。
 		if strings.EqualFold(runner.RuntimeAuthMode(def.Kind), string(domain.RuntimeAuthPersonal)) {
 			if user, ok := e.repo.User(userID); !ok || !userHasAgentCredential(user, def.Kind) {
 				continue
 			}
 		}
 		if !strings.EqualFold(def.Kind, fallback.Kind) {
-			log.Printf("executor: user %d prefers %s，回退到 %s（%s）", userID, preferred, def.ID, def.Kind)
+			log.Printf("executor: user %d prefers %s，使用 %s（%s）", userID, preferred, def.ID, def.Kind)
+			def.Model = fallback.Model
+			def.Effort = fallback.Effort
 		}
 		return def
 	}

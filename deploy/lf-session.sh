@@ -8,7 +8,17 @@ usage() { cat <<'U'
   lf-session submit [--decision pass|rework] [--note "备注"]
 U
 }
-find_ws() { d="$PWD"; while [ "$d" != "/" ]; do [ -d "$d/.agentflow/interactive" ] && { echo "$d"; return; }; d=$(dirname "$d"); done; }
+find_ws() {
+  d="$PWD"
+  while [ "$d" != "/" ]; do
+    [ -d "$d/.agentflow/interactive" ] && { echo "$d"; return; }
+    [ -d "$d/workspace/.agentflow/interactive" ] && { echo "$d/workspace"; return; }
+    d=$(dirname "$d")
+  done
+  for sub in "$PWD/workspace" "$PWD"/*/workspace; do
+    [ -d "$sub/.agentflow/interactive" ] && { echo "$sub"; return; }
+  done
+}
 case "${1:-}" in
   attach) exec tmux attach -t "lf-$2-$3" ;;
   sessions) tmux ls 2>/dev/null | grep '^lf-' || echo "没有正在进行的交互会话" ;;
@@ -20,7 +30,7 @@ case "${1:-}" in
     shift; dec=""; note=""
     while [ $# -gt 0 ]; do case "$1" in --decision) dec="${2:-}"; shift 2;; --note) note="${2:-}"; shift 2;; *) shift;; esac; done
     ws=$(find_ws)
-    if [ -z "$ws" ]; then echo "未找到交互工作区（.agentflow/interactive），请先 cd 到 ~/.agentflow-runner/workspace/runs/<runId>" >&2; exit 1; fi
+    if [ -z "$ws" ]; then echo "未找到交互工作区（.agentflow/interactive），请 cd 到 ~/.agentflow-runner/workspace/runs/<runId>/workspace 后重试" >&2; exit 1; fi
     if [ -z "$dec" ]; then
       echo "提交结果：1) pass 通过  2) rework 返工"
       read -r -p "输入 1/2: " c
