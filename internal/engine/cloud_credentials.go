@@ -1,6 +1,7 @@
 package engine
 
 import (
+	"context"
 	"os"
 	"strconv"
 	"strings"
@@ -46,4 +47,13 @@ func (e *Engine) isCloudPoolRun(run domain.Run) bool {
 		return false
 	}
 	return run.ExecutionContext.ExecutionMode == domain.ExecutionModeCloud
+}
+
+// platformGitToken 返回平台级共享 Git 令牌：优先环境变量，其次服务账号。
+// 开发者个人未配置令牌时回退到这里，避免逐个给同事配置。
+func (e *Engine) platformGitToken(ctx context.Context) string {
+	if v := strings.TrimSpace(os.Getenv("AGENTFLOW_PLATFORM_GIT_TOKEN")); v != "" {
+		return v
+	}
+	return strings.TrimSpace(resolveGitToken(e.repo, cloudServiceUserID()))
 }

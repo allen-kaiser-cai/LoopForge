@@ -92,6 +92,23 @@ func takeRun(db *gorm.DB, id string) (runRow, bool) {
 
 // ---------- Reads ----------
 
+// ActiveRunForIssueWorkflow 返回同一需求同一 SOP 的运行中实例（用于并发保护）。
+func (r *RunsRepo) ActiveRunForIssueWorkflow(issueID, workflowID string) (string, bool) {
+	if issueID == "" || workflowID == "" {
+		return "", false
+	}
+	for _, run := range r.Runs() {
+		if run.ExecutionContext.IssueID != issueID || run.WorkflowID != workflowID {
+			continue
+		}
+		switch run.Status {
+		case "running", "waiting", "waiting_approval", "queued":
+			return run.ID, true
+		}
+	}
+	return "", false
+}
+
 func (r *RunsRepo) Runs() []domain.Run {
 	var rows []runRow
 	if err := r.DB.Find(&rows).Error; err != nil {

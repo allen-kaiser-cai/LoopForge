@@ -953,8 +953,9 @@ func (e *Engine) preflightRunnerExecution(ctx context.Context, runner domain.Run
 	if e.isCloudPoolRunner(runner) {
 		credentialUserID = cloudServiceUserID()
 	}
-	if strings.TrimSpace(e.repo.GitCredential(ctx, credentialUserID)) == "" {
-		return fmt.Errorf("责任人未配置 Git 令牌，无法拉取仓库。请在「个人配置 → 代码托管」配置 GitLab 访问令牌后重试")
+	if strings.TrimSpace(e.repo.GitCredential(ctx, credentialUserID)) == "" &&
+		e.platformGitToken(ctx) == "" {
+		return fmt.Errorf("责任人未配置 Git 令牌，且平台未配置共享 Git 令牌。请联系管理员配置平台 Git 令牌，或在个人配置的 Git 凭据中配置访问令牌")
 	}
 	if runner.RuntimeAuthMode(ex.Kind) == domain.RuntimeAuthPersonal {
 		user, ok := e.repo.User(credentialUserID)

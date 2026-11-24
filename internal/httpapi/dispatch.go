@@ -79,6 +79,12 @@ func dispatchIssue(d *deps, req dispatchRequest) (domain.Task, error) {
 	if workflowID == "" {
 		workflowID = repo.DefaultWorkflowID(issue.Source, issue.Kind)
 	}
+	// 并发保护：同一需求同一 SOP 已有运行中实例时，禁止再次启动，
+	// 避免反复点“重新运行”产生多条重复流程。
+	if activeID, ok := d.repo.ActiveRunForIssueWorkflow(issue.ID, workflowID); ok {
+		return domain.Task{}, HTTPError{http.StatusConflict,
+			fmt.Sprintf("该需求已有运行中的同一 SOP（%s），请先停止或等待其完成后再重跑", activeID)}
+	}
 	if workflowID == "" {
 		workflowID = project.WorkflowID
 	}
