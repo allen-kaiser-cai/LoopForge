@@ -530,7 +530,18 @@ func (e *Engine) retryContext(ctx context.Context, runID, nodeID, reason, humanC
 		return fmt.Errorf("run not found")
 	}
 	if e.executes() && e.workspaceBlocked(r) {
-		return fmt.Errorf("run %s 的工作区绑定在 %s:%s，请在绑定实例上重试（或清理该 run 的 workspace 绑定后重试）", runID, r.WorkspaceHost, r.WorkspaceRoot)
+		if strings.TrimSpace(r.WorkspaceHost) != "" && r.WorkspaceHost != e.workspaceHost {
+			// 绑定实例已不存在（平台重启/换实例）：自动清空绑定，在当前实例重建工作区。
+			if err := e.repo.ClearRunWorkspaceBinding(runID); err != nil {
+				return fmt.Errorf("clear stale workspace binding: %w", err)
+			}
+			if refreshed, ok := e.repo.RunState(runID); ok {
+				r = refreshed
+			}
+		}
+		if e.workspaceBlocked(r) {
+			return fmt.Errorf("run %s 的工作区绑定在 %s:%s，请在绑定实例上重试（或清理该 run 的 workspace 绑定后重试）", runID, r.WorkspaceHost, r.WorkspaceRoot)
+		}
 	}
 	if e.executes() {
 		var err error

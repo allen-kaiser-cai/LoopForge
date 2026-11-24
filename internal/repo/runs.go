@@ -1183,6 +1183,18 @@ func (r *RunsRepo) ReleaseRunLease(runID, instanceID string, generation int) err
 	return nil
 }
 
+// ClearRunWorkspaceBinding 清空运行的工作区绑定，让它在当前实例重建工作区。
+func (r *RunsRepo) ClearRunWorkspaceBinding(runID string) error {
+	if strings.TrimSpace(runID) == "" {
+		return fmt.Errorf("run id is required")
+	}
+	now := time.Now().UTC()
+	return r.DB.Model(&runRow{}).Where("id = ?", runID).Updates(map[string]any{
+		"sandbox_id": "", "owner_instance_id": "", "workspace_host": "", "workspace_root": "",
+		"workspace_cleaned_at": nil, "workspace_cleanup_not_before": nil, "updated_at": now,
+	}).Error
+}
+
 func (r *RunsRepo) BindRunWorkspace(runID, instanceID string, generation int, host, root string) (bool, error) {
 	var bound bool
 	err := r.DB.Transaction(func(tx *gorm.DB) error {
