@@ -496,20 +496,37 @@ func FindChromium() (string, error) {
 		}
 		return path, nil
 	}
-	for _, name := range []string{"chromium", "chromium-browser", "google-chrome-stable", "google-chrome", "chrome", "microsoft-edge"} {
-		if path, err := exec.LookPath(name); err == nil {
-			return path, nil
-		}
-	}
-	candidates := []string{
-		"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-		"/Applications/Chromium.app/Contents/MacOS/Chromium",
-		"/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
-	}
+	var candidates []string
+	// 优先使用 Playwright 自带的 Chromium / Chrome for Testing，避免抢占用户日常浏览器。
 	if home, err := os.UserHomeDir(); err == nil {
-		for _, pattern := range []string{".cache/ms-playwright/chromium-*/chrome-linux*/chrome", "Library/Caches/ms-playwright/chromium-*/chrome-mac*/Chromium.app/Contents/MacOS/Chromium", "Library/Caches/ms-playwright/chromium-*/chrome-mac*/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing"} {
+		for _, pattern := range []string{
+			"Library/Caches/ms-playwright/chromium-*/chrome-mac*/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing",
+			"Library/Caches/ms-playwright/chromium-*/chrome-mac*/Chromium.app/Contents/MacOS/Chromium",
+			".cache/ms-playwright/chromium-*/chrome-linux*/chrome",
+		} {
 			matches, _ := filepath.Glob(filepath.Join(home, pattern))
 			candidates = append(candidates, matches...)
+		}
+	}
+	// 系统里独立的 Chromium/Edge 可作为兜底；系统 Google Chrome 默认不启动，
+	// 因为 macOS 上 headless 启动会让“点图标”激活无窗口进程（用户日常浏览器打不开）。
+	for _, name := range []string{"chromium", "chromium-browser"} {
+		if path, err := exec.LookPath(name); err == nil {
+			candidates = append(candidates, path)
+		}
+	}
+	candidates = append(candidates,
+		"/Applications/Chromium.app/Contents/MacOS/Chromium",
+		"/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+	)
+	allowSystem := strings.EqualFold(strings.TrimSpace(os.Getenv("AGENTFLOW_ALLOW_SYSTEM_CHROME")), "1") ||
+		strings.EqualFold(strings.TrimSpace(os.Getenv("AGENTFLOW_ALLOW_SYSTEM_CHROME")), "true")
+	if allowSystem {
+		candidates = append(candidates, "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
+		for _, name := range []string{"google-chrome-stable", "google-chrome", "chrome"} {
+			if path, err := exec.LookPath(name); err == nil {
+				candidates = append(candidates, path)
+			}
 		}
 	}
 	for _, path := range candidates {
@@ -517,7 +534,7 @@ func FindChromium() (string, error) {
 			return path, nil
 		}
 	}
-	return "", fmt.Errorf("本机未找到 Chromium/Chrome；运行 .ci/ensure-chromium.sh 安装，或设置 AGENTFLOW_CHROMIUM")
+	return "", fmt.Errorf("本机未找到独立 Chromium/Chrome for Testing（已禁用系统 Google Chrome 以免抢占浏览器）；请运行 .ci/ensure-chromium.sh 安装，或设置 AGENTFLOW_CHROMIUM")
 }
 
 // lookupBrowserEndpoint finds the run browser on this host regardless of

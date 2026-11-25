@@ -844,7 +844,10 @@ func (d *Daemon) executeInvocation(ctx context.Context, task domain.RunnerTask) 
 	}
 	executor := d.invocationExecutor(task)
 	var browserMCP *domain.MCPServerDefinition
-	if runtime.BrowserWantedForExecutor(executor.Kind) {
+	// SOP 节点（带产物契约）默认不启动 Agent 浏览器，避免无谓占用和抢占用户浏览器；
+	// 需要时设置 AGENTFLOW_BROWSER_TASKS=on 强制开启。
+	browserForTask := len(inv.Artifacts) == 0 || strings.EqualFold(strings.TrimSpace(os.Getenv("AGENTFLOW_BROWSER_TASKS")), "on")
+	if browserForTask && runtime.BrowserWantedForExecutor(executor.Kind) {
 		browserMCP = runtime.EnsureSandboxBrowser(ctx, sandbox, workspace, inv.RunID, nil)
 	}
 	prepared, err := d.executor.PrepareRemote(workspace, runtime.RemoteInvocation{
