@@ -725,6 +725,9 @@ func (e *Engine) executeNode(ctx context.Context, runID string, wf domain.Workfl
 			if requiresSubmit {
 				options.GateResultPath = gateResultPath(nodeControlKey(current, node.ID), attempt)
 			}
+			if node.Interactive && strings.EqualFold(e.repo.InteractiveMode(current.ExecutionContext.ResponsibleUserID), "ide") {
+				return e.runIDEInteractive(ctx, current, effectiveNode, sb.Workspace(), options.GateResultPath, sink)
+			}
 			ex := ex
 			if cb := sb.credentialSnapshot().CodeBuddy; ex.Kind == "codebuddy" && cb.Sponsored {
 				ex = e.sponsoredExecutor(runID, ex, cb.SponsoredModels, sink)
@@ -796,8 +799,18 @@ func (e *Engine) executeNode(ctx context.Context, runID string, wf domain.Workfl
 		}
 		var submitted *domain.GateResult
 		if err == nil && requiresSubmit {
-			submitted, err = readGateResultFrom(outputs, submitPath)
-			if err != nil || submitted == nil {
+			if ide, ok := e.repo.IDETask(ideTaskID(runID, node.ID)); ok && ide.Status == "confirmed" {
+				decision := strings.ToLower(strings.TrimSpace(ide.Decision))
+				if decision == "" {
+					decision = "pass"
+				}
+				submitted = &domain.GateResult{Decision: decision, Reason: strings.TrimSpace(ide.Note)}
+			} else {
+				submitted, err = readGateResultFrom(outputs, submitPath)
+			}
+			if submitted != nil {
+				err = nil
+			} else if err != nil || submitted == nil {
 				firstProblem := "未调用 submit_gate_result"
 				if err != nil {
 					firstProblem = err.Error()
@@ -870,6 +883,15 @@ func (e *Engine) executeNode(ctx context.Context, runID string, wf domain.Workfl
 			if len(recovered) > 0 {
 				e.observe(runID, node.ID, domain.TelemetryEvent{Category: "artifact", Name: "artifact.recovered", Phase: "progress", Message: "从错误写入位置收回交付物：" + strings.Join(recovered, "；")})
 			}
+			// IDE 模式下产物由开发者通过接口上传并写入运行工作区，直接以工作区为准。
+			ideOutputsOverride := false
+			if node.Interactive {
+				if ideMode := e.repo.InteractiveMode(current.ExecutionContext.ResponsibleUserID); strings.EqualFold(ideMode, "ide") {
+					outputs = workspaceOutputs(sb.Workspace())
+					ideOutputsOverride = true
+				}
+			}
+			_ = ideOutputsOverride
 			if validateErr := validateArtifactOutputs(outputs, live, effectiveNode); validateErr != nil {
 				err = fmt.Errorf("artifact contract: %w", validateErr)
 			} else if len(effectiveNode.ArtifactOutputs) > 0 {

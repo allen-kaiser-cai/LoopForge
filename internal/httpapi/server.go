@@ -93,6 +93,7 @@ type Server struct {
 	botIdentities   *botIdentityHandlers
 	know            *knowledgeHandlers // knowledge.go / knowledge_proxy.go
 	feedback        *feedbackHandlers  // page_feedback.go
+	ide             *ideHandlers       // ide.go
 }
 
 func New(s *repo.Store, e *engine.Engine, syncSvc *tracker.Service, basicUser, basicPass string) *gin.Engine {
@@ -173,6 +174,7 @@ func newWithNotifications(s *repo.Store, e *engine.Engine, syncSvc *tracker.Serv
 		syncAPI:         &syncHandlers{deps: d},
 		know:            &knowledgeHandlers{deps: d, svc: knowledge.NewService(d.repo, randomID), activity: &knowledgeActivityLog{}},
 		feedback:        &feedbackHandlers{deps: d},
+		ide:             &ideHandlers{deps: d},
 	}
 	e.WorkspaceActive = func(run domain.Run) bool { return api.runs.terminals.HasRunScope(run.ID) }
 	api.catalog.notifications = api.notifications
@@ -545,6 +547,17 @@ func newWithNotifications(s *repo.Store, e *engine.Engine, syncSvc *tracker.Serv
 	g.POST("/api/runs/:id/reject", api.runs.run)
 	g.POST("/api/runs/:id/retry", api.runs.run)
 	g.POST("/api/runs/:id/decline-retry", api.runs.run)
+
+	// IDE + MCP 交互任务
+	g.GET("/ide/confirm/:id", api.ide.confirm)
+	g.POST("/ide/confirm/:id", api.ide.confirm)
+	g.GET("/api/ide/tasks", api.ide.tasks)
+	g.GET("/api/ide/tasks/:id", api.ide.task)
+	g.POST("/api/ide/tasks/:id/artifacts", api.ide.artifact)
+	g.POST("/api/ide/tasks/:id/request-submit", api.ide.requestSubmit)
+	g.GET("/api/ide/tasks/:id/confirm", api.ide.confirm)
+	g.POST("/api/ide/tasks/:id/confirm", api.ide.confirm)
+
 	g.POST("/api/runs/:id/cancel", api.runs.run)
 	g.POST("/api/runs/:id/pause", api.runs.run)
 	g.POST("/api/runs/:id/resume", api.runs.run)
