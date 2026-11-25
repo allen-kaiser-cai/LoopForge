@@ -55,5 +55,8 @@ func (e *Engine) platformGitToken(ctx context.Context) string {
 	if v := strings.TrimSpace(os.Getenv("AGENTFLOW_PLATFORM_GIT_TOKEN")); v != "" {
 		return v
 	}
-	return strings.TrimSpace(resolveGitToken(e.repo, cloudServiceUserID()))
+	if secret, ok := e.repo.GitHTTPCredentialForHost(ctx, cloudServiceUserID(), domain.GongfengRepositoryHost()); ok {
+		return strings.TrimSpace(secret.Token)
+	}
+	return ""
 }

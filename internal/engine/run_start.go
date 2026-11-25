@@ -61,6 +61,30 @@ func (e *Engine) startWorkflow(workflowID, input string, repositories []domain.R
 	if !ok {
 		return domain.Run{}, fmt.Errorf("workflow not found")
 	}
+	if executionContext.SharedScheduleID != "" {
+		version, err := e.repo.SharedScheduleVersion(executionContext.SharedScheduleID, executionContext.SharedScheduleVersion)
+		if err != nil {
+			return domain.Run{}, err
+		}
+		if err := e.repo.ValidateSharedScheduleAssets(version); err != nil {
+			return domain.Run{}, err
+		}
+		allowed := version.HasAsset("sop", workflowID)
+		if !allowed && executionContext.ParentRunID != "" {
+			if parent, ok := e.repo.RunState(executionContext.ParentRunID); ok && parent.ExecutionContext.SharedScheduleID == executionContext.SharedScheduleID && parent.ExecutionContext.SharedScheduleVersion == executionContext.SharedScheduleVersion &&
+				parent.ExecutionContext.ProjectID == executionContext.ProjectID && parent.ExecutionContext.ResponsibleUserID == executionContext.ResponsibleUserID {
+				for _, node := range parent.WorkflowSnapshot.Nodes {
+					if node.Type == "sop" && node.SOPWorkflowID == workflowID && node.ID == executionContext.ParentNodeID {
+						allowed = true
+						break
+					}
+				}
+			}
+		}
+		if !allowed {
+			return domain.Run{}, fmt.Errorf("SOP 不在共享任务的引用范围内")
+		}
+	}
 	return e.startWorkflowDefinition(wf, input, repositories, executionContext, workspace)
 }
 
@@ -92,7 +116,11 @@ func (e *Engine) startWorkflowDefinition(wf domain.WorkflowDefinition, input str
 		}
 	}
 	wf = defaultWorkflowSandboxProfile(wf)
-	wf, err := domain.AttachPreviewBuild(wf)
+	wf, err := configureBaselineAlignCLI(wf)
+	if err != nil {
+		return domain.Run{}, err
+	}
+	wf, err = domain.AttachPreviewBuild(wf)
 	if err != nil {
 		return domain.Run{}, err
 	}
@@ -111,6 +139,19 @@ func (e *Engine) startWorkflowDefinition(wf domain.WorkflowDefinition, input str
 	resources, err := resolveSandboxResources(e.repo, profile)
 	if err != nil {
 		return domain.Run{}, err
+	}
+	if executionContext.SharedScheduleID != "" {
+		if err := e.validateSharedScheduleWorkflow(wf, executionContext.ProjectID, profile, resources); err != nil {
+			return domain.Run{}, err
+		}
+	}
+	e.selectSOPExecutionTarget(&executionContext)
+	wf.ExecutorDefaults = nil
+	if executionContext.ResponsibleUserID > 0 {
+		wf.ExecutorDefaults, _, err = e.planSOPExecutors(wf, executionContext, false)
+		if err != nil {
+			return domain.Run{}, err
+		}
 	}
 	if _, err := workflowSandboxRequirements(e.repo, wf); err != nil {
 		return domain.Run{}, err
@@ -180,50 +221,9 @@ func (e *Engine) startWorkflowDefinition(wf domain.WorkflowDefinition, input str
 		firstRepository = repositories[0]
 	}
 	executionContext.RunID, executionContext.TraceID, executionContext.WorkflowID, executionContext.WorkflowVersion = id, id, workflowID, wf.Version
-	if executionContext.ParentRunID == "" && !executionContext.ExecutionPinned {
-		executionContext.WorkspaceRunID = ""
-		executionContext.WorkspaceRunID = ""
-		// 执行目标按流程配置决定：
-		// - personal：人机协同流程，固定落在责任人自己的电脑上；
-		// - cloud：无人值守的标准动作，落在云池；
-		// - 空值：沿用历史行为（云池优先，个人默认机兜底）。
-		switch strings.ToLower(strings.TrimSpace(wf.ExecutionTarget)) {
-		case "personal":
-			executionContext.ExecutionPool = ""
-			executionContext.ExecutionRunnerID = e.repo.DefaultRunner(executionContext.ResponsibleUserID)
-			if executionContext.ExecutionRunnerID == "" {
-				return domain.Run{}, fmt.Errorf("该流程要求在人机协同模式下执行，但责任人（用户 %d）还没有绑定默认执行机，请先在执行机器页面绑定", executionContext.ResponsibleUserID)
-			}
-		case "cloud":
-			executionContext.ExecutionPool = domain.ExecutionModeCloud
-			if runner, ok := e.cloudPoolRunner(executionContext.ProjectID); ok {
-				executionContext.ExecutionRunnerID = runner.ID
-			}
-		default:
-			if e.cloudPoolServesProject(executionContext.ProjectID) {
-				executionContext.ExecutionPool = domain.ExecutionModeCloud
-				if runner, ok := e.cloudPoolRunner(executionContext.ProjectID); ok {
-					executionContext.ExecutionRunnerID = runner.ID
-				}
-			} else {
-				executionContext.ExecutionRunnerID = e.repo.DefaultRunner(executionContext.ResponsibleUserID)
-			}
-		}
-	}
-	if executionContext.ExecutionRunnerID == "" && !executionContext.ExecutionPinned {
-		if runner, ok := e.cloudPoolRunner(executionContext.ProjectID); ok {
-			executionContext.ExecutionRunnerID = runner.ID
-			executionContext.ExecutionPool = domain.ExecutionModeCloud
-		} else if e.cloudPoolRequired(executionContext.ProjectID) {
-			// The first node binds a pool runner once one is online.
-			executionContext.ExecutionPool = domain.ExecutionModeCloud
-		}
-	}
-	if executionContext.ExecutionRunnerID != "" || executionContext.ExecutionPool == domain.ExecutionModeCloud {
-		executionContext.ExecutionMode = domain.ExecutionModeRunner
-		executionContext.RunnerWorkspaceLayout = domain.RunnerWorkspaceLayoutShared
-	} else {
-		executionContext.ExecutionMode = domain.ExecutionModeCloud
+	// 流程级执行目标（personal / cloud）在上游默认选择之后覆盖。
+	if err := e.applyWorkflowExecutionTarget(wf, &executionContext); err != nil {
+		return domain.Run{}, err
 	}
 	if err := e.requireWorkBranchCapabilities(executionContext.ExecutionRunnerID, repositories); err != nil {
 		return domain.Run{}, err
@@ -284,6 +284,28 @@ func (e *Engine) startWorkflowDefinition(wf domain.WorkflowDefinition, input str
 	}
 	go e.execute(ctx, id)
 	return r, nil
+}
+
+func (e *Engine) selectSOPExecutionTarget(executionContext *domain.TelemetryContext) {
+	if executionContext.ParentRunID == "" && !executionContext.ExecutionPinned {
+		executionContext.ExecutionRunnerID = e.repo.DefaultRunner(executionContext.ResponsibleUserID)
+		executionContext.WorkspaceRunID = ""
+	}
+	if executionContext.ExecutionRunnerID == "" && !executionContext.ExecutionPinned {
+		if runner, ok := e.cloudPoolRunner(executionContext.ProjectID); ok {
+			executionContext.ExecutionRunnerID = runner.ID
+			executionContext.ExecutionPool = domain.ExecutionModeCloud
+		} else if e.cloudPoolRequired(executionContext.ProjectID) {
+			// The first node binds a pool runner once one is online.
+			executionContext.ExecutionPool = domain.ExecutionModeCloud
+		}
+	}
+	if executionContext.ExecutionRunnerID != "" || executionContext.ExecutionPool == domain.ExecutionModeCloud {
+		executionContext.ExecutionMode = domain.ExecutionModeRunner
+		executionContext.RunnerWorkspaceLayout = domain.RunnerWorkspaceLayoutShared
+	} else {
+		executionContext.ExecutionMode = domain.ExecutionModeCloud
+	}
 }
 
 func (e *Engine) executes() bool {

@@ -23,12 +23,13 @@ var (
 // This is a local continuation cache, not the authoritative chat transcript.
 // A ready checkpoint is written only after the corresponding reply is saved.
 type assistantNativeCheckpoint struct {
-	SessionID       string   `json:"sessionId"`
-	Ready           bool     `json:"ready"`
-	HistoryRevision int      `json:"historyRevision"`
-	ContextHash     string   `json:"contextHash"`
-	MessageHashes   []string `json:"messageHashes"`
-	Unstarted       bool     `json:"unstarted,omitempty"`
+	SessionID               string   `json:"sessionId"`
+	Ready                   bool     `json:"ready"`
+	HistoryRevision         int      `json:"historyRevision"`
+	ContextHash             string   `json:"contextHash"`
+	MessageHashes           []string `json:"messageHashes"`
+	Unstarted               bool     `json:"unstarted,omitempty"`
+	WorkspaceRepositoryHash string   `json:"workspaceRepositoryHash,omitempty"`
 }
 
 type assistantNativeSession struct {
@@ -56,22 +57,22 @@ func assistantMessageHashes(messages []assistantMessage) []string {
 
 func openAssistantNativeSession(req assistantRequest, saved domain.AssistantSession, user domain.User, sourceRoot string) (*assistantNativeSession, error) {
 	root := assistantSharedSessionRoot(saved.ID)
-	if err := runtime.ValidateConversationRoot(root); err != nil {
+	if _, err := runtime.ConversationSkillLinks(root); err != nil {
 		return nil, err
 	}
 	if err := os.MkdirAll(root, 0o700); err != nil {
-		return nil, err
+		return nil, runtime.NewConversationStateError("创建共享会话目录", ".", err)
 	}
 	lock, err := os.OpenFile(filepath.Join(root, "session.lock"), os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
-		return nil, err
+		return nil, runtime.NewConversationStateError("打开共享会话锁", "session.lock", err)
 	}
 	if err = syscall.Flock(int(lock.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		_ = lock.Close()
 		if err == syscall.EWOULDBLOCK || err == syscall.EAGAIN {
 			return nil, errAssistantNativeBusy
 		}
-		return nil, err
+		return nil, runtime.NewConversationStateError("获取共享会话锁", "session.lock", err)
 	}
 	native := &assistantNativeSession{root: root, lock: lock}
 	if data, err := os.ReadFile(filepath.Join(root, "session.json")); err == nil {
@@ -80,7 +81,7 @@ func openAssistantNativeSession(req assistantRequest, saved domain.AssistantSess
 		}
 	} else if !os.IsNotExist(err) {
 		native.Close()
-		return nil, err
+		return nil, runtime.NewConversationStateError("读取共享会话缓存", "session.json", err)
 	}
 	// Model settings, mode, approval and selected assets can change without
 	// replacing the CLI journal. History edits explicitly bump its revision.
@@ -115,7 +116,12 @@ func (n *assistantNativeSession) Close() {
 	}
 }
 
-func (n *assistantNativeSession) writeCheckpoint() error {
+func (n *assistantNativeSession) writeCheckpoint() (err error) {
+	defer func() {
+		if err != nil {
+			err = runtime.NewConversationStateError("写入共享会话缓存", "session.json", err)
+		}
+	}()
 	data, err := json.Marshal(n.checkpoint)
 	if err != nil {
 		return err
@@ -154,6 +160,7 @@ func (n *assistantNativeSession) restart() error {
 	n.resume = false
 	n.checkpoint.SessionID = newAssistantSessionID()
 	n.checkpoint.Unstarted = true
+	n.checkpoint.WorkspaceRepositoryHash = ""
 	return n.begin()
 }
 

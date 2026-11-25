@@ -11,8 +11,11 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
+
+	"agentflow/internal/config"
 )
 
 const (
@@ -30,7 +33,7 @@ const (
 // while the caller holds the user's refresh lock, so it must never hang.
 var httpClient = &http.Client{Timeout: 15 * time.Second}
 
-// Config is the OAuth application registered on gitlabnew.inter.wcansoft.com.
+// Config describes the OAuth application registered on the deployment's host.
 type Config struct {
 	ClientID     string
 	ClientSecret string
@@ -42,21 +45,40 @@ type Config struct {
 
 // Enabled reports whether the process has enough configuration to start a grant.
 func (c Config) Enabled() bool {
+	return c.RefreshEnabled() && c.AuthorizeURL != "" && c.APIBase != ""
+}
+
+func (c Config) RefreshEnabled() bool {
+	return c.clientConfigured() && c.TokenURL != ""
+}
+
+func (c Config) clientConfigured() bool {
 	return strings.TrimSpace(c.ClientID) != "" && strings.TrimSpace(c.ClientSecret) != "" && strings.TrimSpace(c.RedirectURI) != ""
 }
 
-// ConfigFromEnv reads the application credentials. Authorize, token and API
-// URLs fall back to git.example.com; the overrides exist so tests can point at a
-// local server.
+// ConfigFromEnv derives endpoints from the configured host. Explicit OAuth
+// endpoint overrides still take precedence.
 func ConfigFromEnv() Config {
+	host := config.GongfengHost()
+	endpoint := func(path string) string {
+		if host == "" {
+			return ""
+		}
+		return "https://" + host + path
+	}
 	return Config{
 		ClientID:     strings.TrimSpace(os.Getenv("AGENTFLOW_GONGFENG_OAUTH_CLIENT_ID")),
 		ClientSecret: strings.TrimSpace(os.Getenv("AGENTFLOW_GONGFENG_OAUTH_CLIENT_SECRET")),
 		RedirectURI:  strings.TrimSpace(os.Getenv("AGENTFLOW_GONGFENG_OAUTH_REDIRECT_URI")),
-		AuthorizeURL: envOr("AGENTFLOW_GONGFENG_OAUTH_AUTHORIZE_URL", defaultAuthorizeURL),
-		TokenURL:     envOr("AGENTFLOW_GONGFENG_OAUTH_TOKEN_URL", defaultTokenURL),
-		APIBase:      strings.TrimRight(envOr("AGENTFLOW_GONGFENG_OAUTH_API_BASE", defaultAPIBase), "/"),
+		AuthorizeURL: envOr("AGENTFLOW_GONGFENG_OAUTH_AUTHORIZE_URL", endpoint("/oauth/authorize")),
+		TokenURL:     envOr("AGENTFLOW_GONGFENG_OAUTH_TOKEN_URL", endpoint("/oauth/token")),
+		APIBase:      strings.TrimRight(envOr("AGENTFLOW_GONGFENG_OAUTH_API_BASE", endpoint("/api/v3")), "/"),
 	}
+}
+
+func envBool(key string) bool {
+	on, _ := strconv.ParseBool(strings.TrimSpace(os.Getenv(key)))
+	return on
 }
 
 func envOr(key, fallback string) string {
@@ -86,7 +108,7 @@ func (t Token) Expiry(now time.Time) time.Time {
 
 // AuthorizeURL is the browser location that asks the user to approve the app.
 func AuthorizeURL(cfg Config, state string) (string, error) {
-	if !cfg.Enabled() {
+	if !cfg.clientConfigured() || cfg.AuthorizeURL == "" {
 		return "", fmt.Errorf("工蜂 OAuth 未配置")
 	}
 	u, err := url.Parse(cfg.AuthorizeURL)
@@ -156,7 +178,7 @@ func Username(ctx context.Context, cfg Config, accessToken string) (string, erro
 }
 
 func requestToken(ctx context.Context, cfg Config, form url.Values) (Token, error) {
-	if !cfg.Enabled() {
+	if !cfg.RefreshEnabled() {
 		return Token{}, fmt.Errorf("工蜂 OAuth 未配置")
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.TokenURL, strings.NewReader(form.Encode()))

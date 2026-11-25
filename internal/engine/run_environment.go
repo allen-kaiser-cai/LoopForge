@@ -229,13 +229,23 @@ func (e *Engine) resolveRunCredentials(run domain.Run) runtime.RunCredentials {
 		userID = cloudServiceUserID()
 	}
 	credentials := runtime.RunCredentials{
-		CodeBuddy: resolveCodeBuddyCredential(e.repo, userID),
-		GitToken:  resolveGitToken(e.repo, userID),
+		CodeBuddy:          resolveCodeBuddyCredential(e.repo, userID),
+		GitHTTPCredentials: e.repo.GitHTTPCredentialSecrets(context.Background(), userID),
 	}
-	// 个人未配置 Git 令牌时回退平台共享令牌（管理员配置一次，全员可用）。
-	if strings.TrimSpace(credentials.GitToken) == "" {
-		credentials.GitToken = e.platformGitToken(context.Background())
+	// 个人未配置 Git 凭据时回退平台共享令牌（管理员配置一次，全员可用）。
+	if credentials.GitHTTPCredentials == nil {
+		credentials.GitHTTPCredentials = map[string]domain.GitHTTPExecutionCredential{}
 	}
+	sharedHost := domain.GongfengRepositoryHost()
+	if _, ok := credentials.GitHTTPCredentials[sharedHost]; !ok {
+		if token := e.platformGitToken(context.Background()); token != "" {
+			credentials.GitHTTPCredentials[sharedHost] = domain.GitHTTPExecutionCredential{
+				GitHTTPCredential: domain.GitHTTPCredential{Name: "平台共享令牌", Platform: domain.GitPlatformGitLab, Host: sharedHost, Username: "private"},
+				Token:             token,
+			}
+		}
+	}
+	credentials.Extra = runtime.ExtraRunCredentials(userID)
 	credentials.GitSSHKeys = e.repo.GitSSHKeysForRemotes(userID, sshRepositoryURLs(run.RepositoryContexts()))
 	identity := resolveGitIdentity(e.repo, userID)
 	credentials.GitUserName = identity.name
@@ -245,7 +255,10 @@ func (e *Engine) resolveRunCredentials(run domain.Run) runtime.RunCredentials {
 		credentials.ClaudeCode = runtime.ProviderCredential{APIKey: user.ClaudeCodeAPIKey, BaseURL: user.ClaudeCodeBaseURL}
 		credentials.AgentCLI = runtime.AgentCLIUserCredentials(user)
 	}
-	scriptAssets, _, _ := runtime.PrepareMCPServers(e.resolveScriptMCPAssets(run.ExecutionContext.ProjectID, userID), runtime.MCPTarget{GitToken: credentials.GitToken})
+	scriptAssets, _, _ := runtime.PrepareMCPServers(e.resolveScriptMCPAssets(run.ExecutionContext.ProjectID, userID), runtime.MCPTarget{
+		GitHTTPCredentials: credentials.GitHTTPCredentials,
+		ExtraCredentials:   credentials.Extra,
+	})
 	credentials.MCPServers = scriptAssets.MCPServers
 	return credentials
 }
