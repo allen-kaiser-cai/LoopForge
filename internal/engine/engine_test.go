@@ -1408,7 +1408,7 @@ func TestRunWaitsForGateAndCompletes(t *testing.T) {
 	if current.Nodes["review"].Status != "waiting_approval" {
 		t.Fatalf("review status = %s", current.Nodes["review"].Status)
 	}
-	if err := e.Approve(r.ID, "review", ""); err != nil {
+	if err := e.Approve(r.ID, "review", "", ApprovalActor{}); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, s, r.ID, "succeeded")
@@ -1440,7 +1440,7 @@ func TestHumanGateFailureWaitsForApprove(t *testing.T) {
 	if current.Nodes["check"].Status != "waiting_approval" {
 		t.Fatalf("check status = %s error=%s", current.Nodes["check"].Status, current.Nodes["check"].Error)
 	}
-	if err := e.Approve(r.ID, "check", ""); err != nil {
+	if err := e.Approve(r.ID, "check", "", ApprovalActor{}); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, s, r.ID, "succeeded")
@@ -1564,7 +1564,7 @@ func TestSubmitReworkBudgetExhaustedWaitsForHuman(t *testing.T) {
 		t.Fatalf("budget-exhausted rework must explain itself: %q", review.Error)
 	}
 	// A human approval accepts the upstream output and completes the run.
-	if err := e.Approve(run.ID, "review", ""); err != nil {
+	if err := e.Approve(run.ID, "review", "", ApprovalActor{}); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, s, run.ID, "succeeded")
@@ -1946,7 +1946,7 @@ func TestRejectResetsTargetAndDescendants(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, s, r.ID, "waiting")
-	if err := e.Reject(r.ID, domain.RejectRequest{NodeID: "review", TargetID: "implement", Reason: "needs changes"}); err != nil {
+	if err := e.Reject(r.ID, domain.RejectRequest{NodeID: "review", TargetID: "implement", Reason: "needs changes"}, ApprovalActor{}); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, s, r.ID, "waiting")
@@ -2512,7 +2512,7 @@ func TestAutomaticGatesAndArtifactsCompleteBeforeManualApproval(t *testing.T) {
 	if artifactValidatedSequence == 0 || gateStartedSequence == 0 || artifactValidatedSequence >= gateStartedSequence {
 		t.Fatalf("artifact validation must precede the automatic gate: artifact=%d gate=%d", artifactValidatedSequence, gateStartedSequence)
 	}
-	if err := e.Approve(r.ID, "deliver", ""); err != nil {
+	if err := e.Approve(r.ID, "deliver", "", ApprovalActor{}); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, s, r.ID, "succeeded")
@@ -2629,7 +2629,7 @@ func TestRunUsesFrozenWorkflowSnapshotDuringConcurrentEdits(t *testing.T) {
 	if err := s.PutWorkflow(edited); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.Approve(r.ID, "approve", ""); err != nil {
+	if err := e.Approve(r.ID, "approve", "", ApprovalActor{}); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, s, r.ID, "succeeded")
@@ -3921,7 +3921,7 @@ func TestApproveWithHumanContextReachesDownstream(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, s, r.ID, "waiting")
-	if err := e.Approve(r.ID, "gate", "QTA 失败用例 TestFoo"); err != nil {
+	if err := e.Approve(r.ID, "gate", "QTA 失败用例 TestFoo", ApprovalActor{}); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, s, r.ID, "succeeded")

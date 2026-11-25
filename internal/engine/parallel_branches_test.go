@@ -140,7 +140,7 @@ func TestWaitingBranchDoesNotStopRunningSibling(t *testing.T) {
 	if got.Nodes["after-slow"].Status != "succeeded" {
 		t.Fatalf("after-slow = %s", got.Nodes["after-slow"].Status)
 	}
-	if err := e.Approve(run.ID, "gate", ""); err != nil {
+	if err := e.Approve(run.ID, "gate", "", ApprovalActor{}); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, s, run.ID, "succeeded")
@@ -167,7 +167,7 @@ func TestReworkResetsRunningSiblingWithoutDoubleCommit(t *testing.T) {
 	waitRun(t, s, run.ID, 30*time.Second, func(r domain.Run) bool {
 		return r.Nodes["gate"] != nil && r.Nodes["gate"].Status == "waiting_approval" && r.Nodes["slow"] != nil && r.Nodes["slow"].Status == "running"
 	})
-	if err := e.Reject(run.ID, domain.RejectRequest{NodeID: "gate", TargetID: "start", Reason: "redo"}); err != nil {
+	if err := e.Reject(run.ID, domain.RejectRequest{NodeID: "gate", TargetID: "start", Reason: "redo"}, ApprovalActor{}); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, s, run.ID, "waiting")
@@ -184,7 +184,7 @@ func TestReworkResetsRunningSiblingWithoutDoubleCommit(t *testing.T) {
 	if n := nodeEvents(got, "start", "node.succeeded"); n != 2 {
 		t.Fatalf("start succeeded %d times, want 2", n)
 	}
-	if err := e.Approve(run.ID, "gate", ""); err != nil {
+	if err := e.Approve(run.ID, "gate", "", ApprovalActor{}); err != nil {
 		t.Fatal(err)
 	}
 	waitFor(t, s, run.ID, "succeeded")

@@ -171,7 +171,7 @@ type RepositoryContext struct {
 
 // GongfengRepoHost is the hostname of the optional legacy GitLab-compatible
 // hosting service. Repository links pasted by users are normalized against it.
-const GongfengRepoHost = "gitlabnew.inter.wcansoft.com"
+const GongfengRepoHost = "git.example.com"
 
 func GongfengRepositoryHost() string {
 	if host := config.GongfengHost(); host != "" {
@@ -267,7 +267,7 @@ func ParseGongfengRepoURL(raw string) (GongfengRepoInfo, bool) {
 	info := GongfengRepoInfo{Project: project}
 	info.Name = project[strings.LastIndex(project, "/")+1:]
 	host := GongfengRepositoryHost()
-	info.WebURL = "http://" + host + "/" + project
+	info.WebURL = "https://" + host + "/" + project
 	info.CloneURL = info.WebURL + ".git"
 	if sshClone && !strings.Contains(host, ":") {
 		info.CloneURL = "git@" + host + ":" + project + ".git"

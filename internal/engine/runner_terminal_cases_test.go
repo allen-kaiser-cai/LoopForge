@@ -46,6 +46,7 @@ func cvETerminalEngine(t *testing.T, status, result, errText string, exitCode *i
 }
 
 func TestRunnerTerminalDispatchResults(t *testing.T) {
+	t.Setenv("AGENTFLOW_PLATFORM_GIT_TOKEN", "test-token")
 	for _, tc := range []struct {
 		name, status, errText string
 		exit                  *int

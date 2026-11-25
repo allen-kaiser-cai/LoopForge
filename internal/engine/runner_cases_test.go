@@ -18,9 +18,13 @@ import (
 
 func cvERunner(t *testing.T, e *Engine, id string, status string, providers ...string) domain.Runner {
 	t.Helper()
+	now := time.Now().UTC()
 	r := domain.Runner{ID: id, Name: id, Status: status, RunnerVersion: domain.RunnerVersionWorkspaceOwnerPreparation}
+	if status != domain.RunnerStatusOffline {
+		r.LastSeenAt = &now
+	}
 	for _, provider := range providers {
-		r.Runtimes = append(r.Runtimes, domain.RunnerRuntime{Provider: provider, Status: "ready", AuthMode: domain.RuntimeAuthLocal})
+		r.Runtimes = append(r.Runtimes, domain.RunnerRuntime{Provider: provider, Status: domain.RuntimeStatusOnline, AuthMode: domain.RuntimeAuthLocal})
 	}
 	if err := e.repo.PutRunner(r); err != nil {
 		t.Fatal(err)
@@ -97,18 +101,18 @@ func TestRunnerCallbacksPathsBindingsAndReconnect(t *testing.T) {
 	}
 	bindRunnerRepositories(nil, run, "", "")
 
-	if err := e.requireRunnerProvider("missing", "codex"); err == nil {
+	if err := e.requireRunnerProvider("missing", "codex", false); err == nil {
 		t.Fatal("missing runner accepted")
 	}
 	cvERunner(t, e, "offline", domain.RunnerStatusOffline, "codex")
-	if err := e.requireRunnerProvider("offline", "codex"); err == nil {
+	if err := e.requireRunnerProvider("offline", "codex", false); err == nil {
 		t.Fatal("offline runner accepted")
 	}
 	cvERunner(t, e, "online", domain.RunnerStatusOnline, "terminal", "codex")
-	if err := e.requireRunnerProvider("online", "claude-code"); err == nil {
+	if err := e.requireRunnerProvider("online", "claude-code", false); err == nil {
 		t.Fatal("unsupported provider accepted")
 	}
-	if err := e.requireRunnerProvider("online", "codex"); err != nil {
+	if err := e.requireRunnerProvider("online", "codex", false); err != nil {
 		t.Fatal(err)
 	}
 	reconnect := cvERunnerRun("reconnect", "missing")
@@ -229,7 +233,13 @@ func TestRunnerQueueAwaitEventsAndArtifacts(t *testing.T) {
 }
 
 func TestRunnerDispatchEarlyAndCanceledPaths(t *testing.T) {
+	t.Setenv("AGENTFLOW_PLATFORM_GIT_TOKEN", "test-token")
 	e, _ := cvEEngine(t)
+	if u, ok := e.repo.User(1); ok {
+		u.CodexAPIKey = "key"
+		u.ClaudeCodeAPIKey = "key"
+		_ = e.repo.PutUser(u)
+	}
 	r := cvERunner(t, e, "dispatch", domain.RunnerStatusOnline, "terminal", "codex", "claude-code", "codebuddy")
 	for i := range r.Runtimes {
 		r.Runtimes[i].AuthMode = domain.RuntimeAuthPersonal

@@ -245,7 +245,7 @@ func (h *catalogHandlers) repositories(c *gin.Context) {
 	}
 	if v.GongfengProjectID != "" {
 		if v.WebURL == "" {
-			v.WebURL = "http://" + domain.GongfengRepositoryHost() + "/" + v.GongfengProjectID
+			v.WebURL = "https://" + domain.GongfengRepositoryHost() + "/" + v.GongfengProjectID
 		}
 		if v.CloneURL == "" {
 			v.CloneURL = v.WebURL + ".git"

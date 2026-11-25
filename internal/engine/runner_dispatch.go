@@ -976,20 +976,5 @@ func (e *Engine) preflightRunnerExecution(ctx context.Context, runner domain.Run
 		e.platformGitToken(ctx) == "" {
 		return fmt.Errorf("责任人未配置 Git 令牌，且平台未配置共享 Git 令牌。请联系管理员配置平台 Git 令牌，或在个人配置的 Git 凭据中配置访问令牌")
 	}
-	if runner.RuntimeAuthMode(ex.Kind) == domain.RuntimeAuthPersonal {
-		user, ok := e.repo.User(credentialUserID)
-		if ok {
-			switch ex.Kind {
-			case "claude-code":
-				if strings.TrimSpace(user.ClaudeCodeAPIKey) == "" {
-					return fmt.Errorf("执行机使用「平台凭据」模式，但责任人未配置 Claude Code API Key，请在「个人配置 → 模型凭据」配置后重试")
-				}
-			case "codex":
-				if strings.TrimSpace(user.CodexAPIKey) == "" {
-					return fmt.Errorf("执行机使用「平台凭据」模式，但责任人未配置 Codex API Key，请在「个人配置 → 模型凭据」配置后重试")
-				}
-			}
-		}
-	}
 	return nil
 }

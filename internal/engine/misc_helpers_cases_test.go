@@ -426,14 +426,14 @@ func TestRepositoryPatchRunnerQueueAndArtifactBranches(t *testing.T) {
 		t.Fatal("preview archive missing runner accepted")
 	}
 
-	if err := e.requireRunnerProvider("missing", "terminal"); err == nil {
+	if err := e.requireRunnerProvider("missing", "terminal", false); err == nil {
 		t.Fatal("missing provider runner accepted")
 	}
 	runner.Status = domain.RunnerStatusOffline
 	if err := st.PutRunner(runner); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.requireRunnerProvider(runner.ID, "terminal"); err == nil {
+	if err := e.requireRunnerProvider(runner.ID, "terminal", false); err == nil {
 		t.Fatal("offline runner accepted")
 	}
 	runner.Status = domain.RunnerStatusOnline
@@ -441,14 +441,14 @@ func TestRepositoryPatchRunnerQueueAndArtifactBranches(t *testing.T) {
 	if err := st.PutRunner(runner); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.requireRunnerProvider(runner.ID, "terminal"); err == nil {
+	if err := e.requireRunnerProvider(runner.ID, "terminal", false); err == nil {
 		t.Fatal("unsupported provider accepted")
 	}
 	runner.Runtimes = []domain.RunnerRuntime{{Provider: "terminal", Status: "ready", AuthMode: domain.RuntimeAuthLocal}}
 	if err := st.PutRunner(runner); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.requireRunnerProvider(runner.ID, "terminal"); err != nil {
+	if err := e.requireRunnerProvider(runner.ID, "terminal", false); err != nil {
 		t.Fatal(err)
 	}
 

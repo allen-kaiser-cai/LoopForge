@@ -60,6 +60,7 @@ func (e *Engine) Cancel(runID string) error {
 	if !isLiveStatus(r.Status) {
 		if domain.TerminalRunStatus(r.Status) && r.HasActiveNode() {
 			e.forceTerminate(runID, "cancelled", "流水线已取消")
+			return nil
 		}
 		// 运行已结束但 Runner 侧仍可能持有任务（占并发槽），这里同步取消。
 		_ = e.cancelRunnerTasksForRun(runID)

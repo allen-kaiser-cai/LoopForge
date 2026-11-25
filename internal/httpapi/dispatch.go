@@ -45,9 +45,8 @@ func dispatchIssue(d *deps, req dispatchRequest) (domain.Task, error) {
 		}
 	}
 	runUserID := responsible.ID
-	// 工作项责任人优先：管理员/系统代派时不要把运行责任人改成触发人，
-	// 否则开发分支名和执行机都会按触发人计算。
-	if runUserID == 0 && req.TriggerUserID > 0 {
+	// 默认使用触发人凭据；个人执行机流程后面会覆盖为工作项责任人。
+	if req.TriggerUserID > 0 {
 		if user, ok := d.repo.User(req.TriggerUserID); ok && user.ID > 0 {
 			runUserID = user.ID
 		}
@@ -81,7 +80,7 @@ func dispatchIssue(d *deps, req dispatchRequest) (domain.Task, error) {
 	}
 	// 并发保护：同一需求同一 SOP 已有运行中实例时，禁止再次启动，
 	// 避免反复点“重新运行”产生多条重复流程。
-	if activeID, ok := d.repo.ActiveRunForIssueWorkflow(issue.ID, workflowID); ok {
+	if activeID, ok := d.repo.ActiveRunForIssueWorkflow(issue.ID, workflowID); ok && !req.Rerun {
 		return domain.Task{}, HTTPError{http.StatusConflict,
 			fmt.Sprintf("该需求已有运行中的同一 SOP（%s），请先停止或等待其完成后再重跑", activeID)}
 	}

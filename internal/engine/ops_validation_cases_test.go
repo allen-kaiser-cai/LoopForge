@@ -19,13 +19,13 @@ func TestRunOperationsAdditionalValidationAndSettling(t *testing.T) {
 	if err := e.Pause("missing"); err == nil {
 		t.Fatal("missing pause succeeded")
 	}
-	if err := e.Approve("missing", "node", ""); err == nil {
+	if err := e.Approve("missing", "node", "", ApprovalActor{}); err == nil {
 		t.Fatal("missing approve succeeded")
 	}
 	if err := e.Pass("missing", "node", ""); err == nil {
 		t.Fatal("missing pass succeeded")
 	}
-	if err := e.Reject("missing", domain.RejectRequest{}); err == nil {
+	if err := e.Reject("missing", domain.RejectRequest{}, ApprovalActor{}); err == nil {
 		t.Fatal("missing reject succeeded")
 	}
 	if err := e.Retry("missing", "node", "", ""); err == nil {
@@ -76,13 +76,13 @@ func TestRunOperationsAdditionalValidationAndSettling(t *testing.T) {
 	if err := st.PutRun(waiting); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.Approve(waiting.ID, "missing", ""); err == nil {
+	if err := e.Approve(waiting.ID, "missing", "", ApprovalActor{}); err == nil {
 		t.Fatal("missing approval node accepted")
 	}
-	if err := e.Approve(waiting.ID, "gate", "", NodeExpectation{NodeID: "gate", Status: "waiting_approval", Attempt: 9}); err == nil {
+	if err := e.Approve(waiting.ID, "gate", "", ApprovalActor{}, NodeExpectation{NodeID: "gate", Status: "waiting_approval", Attempt: 9}); err == nil {
 		t.Fatal("stale approval accepted")
 	}
-	if err := e.Approve(waiting.ID, "gate", "approved context"); err != nil {
+	if err := e.Approve(waiting.ID, "gate", "approved context", ApprovalActor{}); err != nil {
 		t.Fatal(err)
 	}
 	approved, _ := st.RunState(waiting.ID)
@@ -121,13 +121,13 @@ func TestRunOperationsAdditionalValidationAndSettling(t *testing.T) {
 	if err := st.PutRun(rejectRun); err != nil {
 		t.Fatal(err)
 	}
-	if err := e.Reject(rejectRun.ID, domain.RejectRequest{NodeID: "other"}); err == nil {
+	if err := e.Reject(rejectRun.ID, domain.RejectRequest{NodeID: "other"}, ApprovalActor{}); err == nil {
 		t.Fatal("reject without target accepted")
 	}
-	if err := e.Reject(rejectRun.ID, domain.RejectRequest{NodeID: "gate", TargetID: "missing"}); err == nil {
+	if err := e.Reject(rejectRun.ID, domain.RejectRequest{NodeID: "gate", TargetID: "missing"}, ApprovalActor{}); err == nil {
 		t.Fatal("missing reject target accepted")
 	}
-	if err := e.Reject(rejectRun.ID, domain.RejectRequest{NodeID: "gate", TargetID: "work", Reason: "redo", Context: "details"}); err != nil {
+	if err := e.Reject(rejectRun.ID, domain.RejectRequest{NodeID: "gate", TargetID: "work", Reason: "redo", Context: "details"}, ApprovalActor{}); err != nil {
 		t.Fatal(err)
 	}
 	rejected, _ := st.RunState(rejectRun.ID)

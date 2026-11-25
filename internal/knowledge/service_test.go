@@ -291,7 +291,7 @@ func TestPublishedSubmissionsAreImmutable(t *testing.T) {
 	_, err := svc.Edit("s", SubmissionEdit{Title: "x"})
 	wantKind(t, err, apperr.Conflict)
 	wantKind(t, svc.Delete("s"), apperr.Conflict)
-	_, err = svc.Reject("s", "no", "r")
+	_, err = svc.Reject("s", "no", "r", ApprovalActor{})
 	wantKind(t, err, apperr.Conflict)
 	_, err = svc.Publish(context.Background(), "s", "r")
 	wantKind(t, err, apperr.Conflict)
@@ -371,7 +371,7 @@ func TestRejectAndCandidates(t *testing.T) {
 	if list[0].SubmissionID != "s" || list[1].SubmissionID != "" {
 		t.Fatalf("candidates should link queued submissions: %+v", list)
 	}
-	item, err := svc.Reject("s", "  dup  ", "r")
+	item, err := svc.Reject("s", "  dup  ", "r", ApprovalActor{})
 	if err != nil || item.Status != domain.KnowledgeSubmissionRejected || item.ReviewNote != "dup" || item.ReviewedBy != "r" {
 		t.Fatalf("reject: %+v %v", item, err)
 	}
