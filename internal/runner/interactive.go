@@ -17,8 +17,10 @@ import (
 type interactiveSubmit struct {
 	Decision string `json:"decision"`
 	Note     string `json:"note,omitempty"`
-	// Target 为 rework 时的改派目标（目前支持 frontend）。
+	// Target 为 rework 时的改派目标（frontend 等）。
 	Target string `json:"target,omitempty"`
+	// Assignee 为 rework 时指定的改派账号（login），优先于 Target。
+	Assignee string `json:"assignee,omitempty"`
 }
 
 // executeInteractiveInvocation 在 tmux 会话里以交互方式启动 Agent CLI，
@@ -153,7 +155,10 @@ func (d *Daemon) executeInteractiveInvocation(ctx context.Context, task domain.R
 		reason = "人工在交互会话中提交"
 	}
 	gate := map[string]any{"decision": decision, "reason": reason, "summary": reason, "findings": []any{}}
-	if target := strings.ToLower(strings.TrimSpace(submitted.Target)); target != "" {
+	if assignee := strings.TrimSpace(submitted.Assignee); assignee != "" {
+		gate["assignee"] = assignee
+		reason = strings.TrimSpace(reason) + " [改派账号:" + assignee + "]"
+	} else if target := strings.ToLower(strings.TrimSpace(submitted.Target)); target != "" {
 		gate["target"] = target
 		reason = strings.TrimSpace(reason) + " [改派:" + target + "]"
 	}
@@ -169,7 +174,9 @@ func (d *Daemon) executeInteractiveInvocation(ctx context.Context, task domain.R
 	}
 	if decision == "rework" {
 		marker := ""
-		if target := strings.ToLower(strings.TrimSpace(submitted.Target)); target != "" {
+		if assignee := strings.TrimSpace(submitted.Assignee); assignee != "" {
+			marker = " REASSIGN:user:" + assignee
+		} else if target := strings.ToLower(strings.TrimSpace(submitted.Target)); target != "" {
 			marker = " REASSIGN:" + target
 		}
 		return execResult{status: domain.RunnerTaskSuccess, exitCode: 0, result: "人工提交：需要返工（" + reason + "）" + marker}
