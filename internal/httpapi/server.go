@@ -551,6 +551,8 @@ func newWithNotifications(s *repo.Store, e *engine.Engine, syncSvc *tracker.Serv
 	// IDE + MCP 交互任务
 	g.GET("/ide/confirm/:id", api.ide.confirm)
 	g.POST("/ide/confirm/:id", api.ide.confirm)
+	g.GET("/api/users/:id/interactive-mode", api.ide.interactiveMode)
+	g.PUT("/api/users/:id/interactive-mode", api.ide.interactiveMode)
 	g.GET("/api/ide/tasks", api.ide.tasks)
 	g.GET("/api/ide/tasks/:id", api.ide.task)
 	g.POST("/api/ide/tasks/:id/artifacts", api.ide.artifact)

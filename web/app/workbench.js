@@ -1212,8 +1212,21 @@ async function renderPersonalSettings(){
     toast('工蜂授权已保存，正在校验授权有效性…');
   }
   if(credentialWizard)closeCredentialWizard(true);
-  host.innerHTML=`<section class="credential-account credential-enter" style="--i:0"><span class="credential-avatar">${userAvatarHTML(user, 150)}</span><div><b>${escapeHTML(userDisplay(user))}</b><small>凭证按用户隔离，仅在你负责的任务运行时注入。</small></div><span class="credential-account-note">${credentialGlyph('lock',14)}任务级注入，不写入 Agent 资产</span></section><section class="credential-panel credential-enter is-entering" id="credentialPanel" style="--i:1"></section>`;
+  host.innerHTML=`<section class="personal-settings-card" style="--i:0;margin:0 0 14px;padding:14px 18px;border:1px solid #26364f;border-radius:12px;background:#0f1726">
+    <h2 style="margin:0 0 6px;font-size:15px">交互方式</h2>
+    <p style="margin:0 0 10px;color:#8b9bb4;font-size:12px">IDE：在 Qoder / Cursor 中通过 MCP 完成设计与编码（推荐）；终端：使用 tmux 会话。</p>
+    <label style="display:flex;align-items:center;gap:10px;font-size:13px">交互方式
+      <select id="interactiveModeSelect" style="padding:6px 10px;border-radius:8px;border:1px solid #2a3a52;background:#0b1220;color:#e6edf7">
+        <option value="ide">IDE + MCP（推荐）</option>
+        <option value="terminal">终端（tmux）</option>
+      </select>
+      <span id="interactiveModeHint" style="color:#34d399;font-size:12px"></span>
+    </label>
+  </section><section class="credential-account credential-enter" style="--i:0"><span class="credential-avatar">${userAvatarHTML(user, 150)}</span><div><b>${escapeHTML(userDisplay(user))}</b><small>凭证按用户隔离，仅在你负责的任务运行时注入。</small></div><span class="credential-account-note">${credentialGlyph('lock',14)}任务级注入，不写入 Agent 资产</span></section><section class="credential-panel credential-enter is-entering" id="credentialPanel" style="--i:1"></section>`;
   const panel=host.querySelector('#credentialPanel');
+  const modeSel=host.querySelector('#interactiveModeSelect');
+  api(`/api/users/${user.id}/interactive-mode`,{silent:true}).then(r=>{if(modeSel&&r?.mode)modeSel.value=r.mode}).catch(()=>{});
+  if(modeSel)modeSel.onchange=async()=>{try{await api(`/api/users/${user.id}/interactive-mode`,{method:'PUT',body:JSON.stringify({mode:modeSel.value})});const hint=host.querySelector('#interactiveModeHint');if(hint){hint.textContent='已保存，下一次派发生效';setTimeout(()=>{hint.textContent=''},2500)}toast('交互方式已更新')}catch(err){toast(err.message)}};
   bindCredentialPanel(panel);
   renderCredentialPanel();
   hydrateCredentialIcons(host);

@@ -155,3 +155,13 @@ func (r *UsersRepo) InteractiveMode(userID int64) string {
 	}
 	return strings.ToLower(strings.TrimSpace(mode))
 }
+
+// SetInteractiveMode 保存账号的交互方式（ide/terminal）。
+func (r *UsersRepo) SetInteractiveMode(userID int64, mode string) error {
+	mode = strings.ToLower(strings.TrimSpace(mode))
+	if mode != "ide" && mode != "terminal" {
+		return fmt.Errorf("interactive mode must be ide or terminal")
+	}
+	return r.DB.Exec(`INSERT INTO user_configs (user_id, interactive_mode) VALUES (?,?)
+		ON DUPLICATE KEY UPDATE interactive_mode=VALUES(interactive_mode)`, userID, mode).Error
+}

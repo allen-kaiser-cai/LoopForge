@@ -124,7 +124,7 @@ func (h *ideHandlers) requestSubmit(c *gin.Context) {
 	}
 	c.JSON(http.StatusOK, map[string]any{
 		"ok": true, "status": "requested",
-		"confirmUrl": fmt.Sprintf("/ide/confirm/%s?token=%s", t.ID, token),
+		"confirmUrl": fmt.Sprintf("/api/ide/tasks/%s/confirm?token=%s", t.ID, token),
 		"message":    "已申请提交，请让责任人在钉钉/浏览器中确认后生效",
 	})
 }
@@ -149,4 +149,32 @@ func (h *ideHandlers) confirm(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, map[string]any{"ok": true, "status": "confirmed"})
+}
+
+// GET/PUT /api/users/:id/interactive-mode
+func (h *ideHandlers) interactiveMode(c *gin.Context) {
+	u, ok := h.deps.requestUser(c.Request, true)
+	if !ok || u == nil {
+		c.JSON(http.StatusUnauthorized, map[string]string{"error": "请先登录"})
+		return
+	}
+	if c.Param("id") != fmt.Sprintf("%d", u.ID) {
+		c.JSON(http.StatusForbidden, map[string]string{"error": "只能修改本人的交互方式"})
+		return
+	}
+	if c.Request.Method == http.MethodGet {
+		c.JSON(http.StatusOK, map[string]string{"mode": h.repo.InteractiveMode(u.ID)})
+		return
+	}
+	var body struct {
+		Mode string `json:"mode"`
+	}
+	if !decode(c, &body) {
+		return
+	}
+	if err := h.repo.SetInteractiveMode(u.ID, body.Mode); err != nil {
+		c.JSON(http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	c.JSON(http.StatusOK, map[string]string{"mode": strings.ToLower(strings.TrimSpace(body.Mode))})
 }

@@ -728,6 +728,9 @@ func (e *Engine) executeNode(ctx context.Context, runID string, wf domain.Workfl
 			if node.Interactive && strings.EqualFold(e.repo.InteractiveMode(current.ExecutionContext.ResponsibleUserID), "ide") {
 				return e.runIDEInteractive(ctx, current, effectiveNode, sb.Workspace(), options.GateResultPath, sink)
 			}
+			if strings.EqualFold(strings.TrimSpace(effectiveNode.ID), "push_branch") && strings.EqualFold(e.repo.InteractiveMode(current.ExecutionContext.ResponsibleUserID), "ide") {
+				return e.ideBranchCheck(ctx, current, gitTok, sink)
+			}
 			ex := ex
 			if cb := sb.credentialSnapshot().CodeBuddy; ex.Kind == "codebuddy" && cb.Sponsored {
 				ex = e.sponsoredExecutor(runID, ex, cb.SponsoredModels, sink)
