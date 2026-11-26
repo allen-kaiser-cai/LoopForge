@@ -184,9 +184,11 @@ func (s *admissionScope) rowBucketKey(row runRow) (string, error) {
 // and never reserve SOP capacity. Nested SOPs share their top-level SOP slot.
 func (s *admissionScope) occupied(key, exclude string) (int, error) {
 	var rows []runRow
+	// 只有真正占用名额的运行计入：running / waiting。
+	// 历史 failed / cancelled 不应长期占满项目名额，否则新运行会永远停在 queued。
 	q := s.tx.Select("id", "kind", "workflow_id", "status", "quota_bucket", "quota_project_id", "quota_parent_run_id", "quota_exempt", "admission_state", "execution_context").
-		Where("(quota_bucket = ? OR quota_bucket IS NULL) AND status NOT IN ? AND (admission_state IS NULL OR admission_state <> ?)",
-			key, []string{"succeeded", "queued"}, "unstarted")
+		Where("(quota_bucket = ? OR quota_bucket IS NULL) AND status IN ? AND (admission_state IS NULL OR admission_state <> ?)",
+			key, []string{"running", "waiting"}, "unstarted")
 	if exclude != "" {
 		q = q.Where("id <> ?", exclude)
 	}
