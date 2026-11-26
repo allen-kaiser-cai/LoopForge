@@ -1647,11 +1647,33 @@ async function renderPersonalSettings(){
       </select>
       <span id="interactiveModeHint" style="color:#34d399;font-size:12px"></span>
     </label>
+  </section><section class="personal-settings-card" style="--i:0;margin:0 0 14px;padding:14px 18px;border:1px solid #26364f;border-radius:12px;background:#0f1726">
+    <h2 style="margin:0 0 6px;font-size:15px">MCP 配置（IDE 使用）</h2>
+    <p style="margin:0 0 10px;color:#8b9bb4;font-size:12px">先在「访问密钥」创建个人令牌，粘贴到这里生成配置；令牌只在本地用于生成配置，不会上传保存。</p>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+      <input id="mcpConfigToken" type="password" autocomplete="off" placeholder="粘贴你的访问密钥（afp_...）" style="flex:1;min-width:240px;padding:6px 10px;border-radius:8px;border:1px solid #2a3a52;background:#0b1220;color:#e6edf7">
+      <button type="button" class="button primary small" id="copyMcpConfig">复制 MCP 配置</button>
+      <a class="button ghost small" href="#" id="gotoAccessKeys">去创建访问密钥</a>
+    </div>
+    <p style="margin:8px 0 0;color:#8b9bb4;font-size:12px">配置地址：<code>http://192.168.105.18:8090/mcp</code></p>
   </section><section class="credential-panel is-entering" id="credentialPanel"></section>`;
   const panel=host.querySelector('#credentialPanel');
   const modeSel=host.querySelector('#interactiveModeSelect');
   api(`/api/users/${user.id}/interactive-mode`,{silent:true}).then(r=>{if(modeSel&&r?.mode)modeSel.value=r.mode}).catch(()=>{});
   if(modeSel)modeSel.onchange=async()=>{try{await api(`/api/users/${user.id}/interactive-mode`,{method:'PUT',body:JSON.stringify({mode:modeSel.value})});const hint=host.querySelector('#interactiveModeHint');if(hint){hint.textContent='已保存，下一次派发生效';setTimeout(()=>{hint.textContent=''},2500)}toast('交互方式已更新')}catch(err){toast(err.message)}};
+  const copyBtn=host.querySelector('#copyMcpConfig');
+  if(copyBtn)copyBtn.onclick=async()=>{
+    const input=host.querySelector('#mcpConfigToken');
+    const token=(input?.value||'').trim();
+    if(!token){toast('请先粘贴访问密钥');input?.focus();return}
+    const config={mcpServers:{loopforge:{url:location.origin+'/mcp',headers:{Authorization:'Bearer '+token}}}};
+    const text=JSON.stringify(config,null,2);
+    try{await navigator.clipboard.writeText(text);toast('MCP 配置已复制，粘贴到 IDE 的 MCP 设置中')}
+    catch{const area=document.createElement('textarea');area.value=text;document.body.appendChild(area);area.select();document.execCommand('copy');area.remove();toast('MCP 配置已复制')}
+    if(input)input.value='';
+  };
+  const accessLink=host.querySelector('#gotoAccessKeys');
+  if(accessLink)accessLink.onclick=(e)=>{e.preventDefault();location.hash='#access';location.reload()};
   bindCredentialPanel(panel);
   renderCredentialPanel();
   loadCredentialEffortCatalogs().then(()=>panel.querySelectorAll('[data-credential-catalog]').forEach(refreshCredentialCatalogEfforts));
