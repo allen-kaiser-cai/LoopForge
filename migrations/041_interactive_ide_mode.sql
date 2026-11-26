@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS ide_interactive_tasks (
   UNIQUE KEY uk_ide_run_node (run_id, node_id),
   KEY idx_ide_status (status),
   KEY idx_ide_user (user_id, status)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 SET @has_token := (
   SELECT COUNT(*) FROM information_schema.columns
