@@ -8,6 +8,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -803,7 +805,21 @@ func (e *Engine) executeNode(ctx context.Context, runID string, wf domain.Workfl
 				return e.runIDEInteractive(ctx, current, effectiveNode, sb.Workspace(), options.GateResultPath, sink)
 			}
 			if strings.EqualFold(strings.TrimSpace(effectiveNode.ID), "push_branch") && strings.EqualFold(e.repo.InteractiveMode(current.ExecutionContext.ResponsibleUserID), "ide") {
-				return e.ideBranchCheck(ctx, current, gitTok, sink)
+				out, checkErr := e.ideBranchCheck(ctx, current, gitTok, sink)
+				if checkErr != nil {
+					return "", checkErr
+				}
+				// 写入该节点的产物契约（如 push-branch.md），否则下游产物校验会失败。
+				for _, c := range effectiveNode.ArtifactOutputs {
+					rel := strings.TrimSpace(c.Path)
+					if rel == "" {
+						rel = strings.TrimSpace(c.Name) + ".md"
+					}
+					target := filepath.Join(sb.Workspace(), filepath.FromSlash(rel))
+					_ = os.MkdirAll(filepath.Dir(target), 0o755)
+					_ = os.WriteFile(target, []byte(out+"\n"), 0o644)
+				}
+				return out, nil
 			}
 			ex := ex
 			if cb := sb.credentialSnapshot().CodeBuddy; ex.Kind == "codebuddy" && cb.Sponsored {
@@ -878,7 +894,17 @@ func (e *Engine) executeNode(ctx context.Context, runID string, wf domain.Workfl
 		}
 		var submitted *domain.GateResult
 		if err == nil && requiresSubmit {
-			if ide, ok := e.repo.IDETask(ideTaskID(runID, node.ID)); ok && ide.Status == "confirmed" {
+			if strings.EqualFold(strings.TrimSpace(node.ID), "push_branch") &&
+				strings.EqualFold(e.repo.InteractiveMode(current.ExecutionContext.ResponsibleUserID), "ide") {
+				reason := strings.TrimSpace(output)
+				if reason == "" {
+					reason = "分支已校验"
+				}
+				submitted = &domain.GateResult{Decision: "pass", Reason: reason, Summary: reason}
+			}
+			if submitted != nil {
+				// 已在 IDE 推分支校验后直接通过，无需再读 gate 文件。
+			} else if ide, ok := e.repo.IDETask(ideTaskID(runID, node.ID)); ok && ide.Status == "confirmed" {
 				decision := strings.ToLower(strings.TrimSpace(ide.Decision))
 				if decision == "" {
 					decision = "pass"
@@ -967,7 +993,7 @@ func (e *Engine) executeNode(ctx context.Context, runID string, wf domain.Workfl
 			}
 			// IDE 模式下产物由开发者通过接口上传并写入运行工作区，直接以工作区为准。
 			ideOutputsOverride := false
-			if node.Interactive {
+			if node.Interactive || strings.EqualFold(strings.TrimSpace(node.ID), "push_branch") {
 				if ideMode := e.repo.InteractiveMode(current.ExecutionContext.ResponsibleUserID); strings.EqualFold(ideMode, "ide") {
 					outputs = workspaceOutputs(sb.Workspace())
 					ideOutputsOverride = true
@@ -1132,6 +1158,10 @@ func (e *Engine) executeNode(ctx context.Context, runID string, wf domain.Workfl
 	artifacts, err := collectArtifactsMode(outputs, current, effectiveNode, output, false)
 	if err != nil {
 		failNode(fmt.Errorf("artifact contract: %w", err), nodeRejects(node))
+		return
+	}
+	if repoErr := e.applyDesignRepoBinding(runID, effectiveNode, sb.Workspace()); repoErr != nil {
+		failNode(repoErr, nodeRejects(node))
 		return
 	}
 	if !shouldCommitNodeOutcome(current, current.Nodes[node.ID], executionGeneration, executionAttempt, true) {

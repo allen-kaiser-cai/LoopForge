@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -187,6 +188,22 @@ func (r *UsersRepo) GitHTTPCredentialSecrets(ctx context.Context, userID int64) 
 	for _, credential := range credentials {
 		if secret, ok := r.GitHTTPCredentialForHost(ctx, userID, credential.Host); ok {
 			out[credential.Host] = domain.GitHTTPExecutionCredential{GitHTTPCredential: secret.GitHTTPCredential, Token: secret.Token, ExpiresAt: secret.ExpiresAt}
+		}
+	}
+	// 平台共享 Git 令牌兜底：个人未配置凭据时，所有执行路径都能用同一个令牌访问内网 Git。
+	if token := strings.TrimSpace(os.Getenv("AGENTFLOW_PLATFORM_GIT_TOKEN")); token != "" {
+		host := domain.GongfengRepositoryHost()
+		if _, ok := out[host]; !ok && host != "" {
+			out[host] = domain.GitHTTPExecutionCredential{
+				GitHTTPCredential: domain.GitHTTPCredential{
+					Name:     "平台共享令牌",
+					Platform: domain.GitPlatformGitLab,
+					Host:     host,
+					Username: "private",
+					Managed:  true,
+				},
+				Token: token,
+			}
 		}
 	}
 	return out

@@ -1452,7 +1452,7 @@ func (d *Daemon) defaultWorkspace(taskID string) string {
 // runnerVersion is reported at registration; it matches the module build.
 // runnerVersion 是 Runner 自身构建版本；能力阈值仍使用 domain.RunnerVersion* 常量。
 // 平台侧修复需要 Runner 一起更新时必须递增该版本，否则执行机不会触发自更新。
-var runnerVersion = "0.10.4"
+var runnerVersion = "0.11.1"
 
 // Version returns the runner build version reported at registration.
 func Version() string { return runnerVersion }

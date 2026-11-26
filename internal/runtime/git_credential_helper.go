@@ -68,7 +68,8 @@ func gitCredentialMain(args []string, in io.Reader, out, errOut io.Writer) int {
 		return 2
 	}
 	attrs := readGitCredentialAttrs(in)
-	if args[0] != "get" || attrs["protocol"] != "https" || attrs["host"] == "" {
+	protocol := attrs["protocol"]
+	if args[0] != "get" || (protocol != "https" && protocol != "http") || attrs["host"] == "" {
 		return 0
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

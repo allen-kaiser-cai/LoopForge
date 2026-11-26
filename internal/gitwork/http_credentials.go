@@ -42,7 +42,7 @@ func httpCredentialForCommand(ctx context.Context, args []string) (credential HT
 		}
 	}
 	u, err := url.Parse(remote)
-	if err != nil || u.Scheme != "https" {
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") {
 		return HTTPCredential{}, "", ""
 	}
 	host, err = HTTPSHostScope("https://" + u.Host)
@@ -55,7 +55,9 @@ func httpCredentialForCommand(ctx context.Context, args []string) (credential HT
 	}
 	// Git can pass either the URL's original spelling or the normalized IPv6
 	// authority from its HTTP transport to the credential helper.
-	return credential, host, strings.TrimSuffix(strings.ToLower(u.Host), ":443")
+	urlHost = strings.TrimSuffix(strings.ToLower(u.Host), ":443")
+	urlHost = strings.TrimSuffix(urlHost, ":80")
+	return credential, host, urlHost
 }
 
 const (
@@ -75,8 +77,9 @@ func scopedCredentialHelper() string {
 				host=*) host=${line#host=} ;;
 			esac
 		done
-		test "$protocol" = https || exit 0
+		case "$protocol" in https|http) ;; *) exit 0 ;; esac
 		host=$(printf '%s' "$host" | tr '[:upper:]' '[:lower:]')
+		host=${host%:80}
 		case "${host%:443}" in
 			"$` + gitHTTPHostEnv + `"|"$` + gitHTTPURLHostEnv + `")
 				printf 'username=%s\npassword=%s\n' "$` + gitHTTPUserEnv + `" "$` + gitHTTPPassEnv + `" ;;
