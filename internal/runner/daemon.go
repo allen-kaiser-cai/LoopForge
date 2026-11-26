@@ -83,6 +83,8 @@ type Config struct {
 	// ManagedCLIRoot explicitly opts platform runners into managed CLI coordination.
 	// Empty leaves ordinary user runners unchanged; it is never inferred from PATH.
 	ManagedCLIRoot string
+	// WorkspaceTTL 是开发机上运行工作区的保留时长；0 表示不自动清理。
+	WorkspaceTTL time.Duration
 }
 
 type daemonState struct {
@@ -162,6 +164,7 @@ func (d *Daemon) Run(ctx context.Context) error {
 		d.dockerHelperSyncDone = make(chan struct{})
 	}
 	go d.rescanLoop(ctx, 5*time.Minute)
+	go d.workspaceCleanupLoop(ctx)
 	heartbeatDone := make(chan struct{})
 	go func() { defer close(heartbeatDone); d.heartbeatLoop(ctx) }()
 	controlDone := make(chan struct{})
@@ -1452,7 +1455,7 @@ func (d *Daemon) defaultWorkspace(taskID string) string {
 // runnerVersion is reported at registration; it matches the module build.
 // runnerVersion 是 Runner 自身构建版本；能力阈值仍使用 domain.RunnerVersion* 常量。
 // 平台侧修复需要 Runner 一起更新时必须递增该版本，否则执行机不会触发自更新。
-var runnerVersion = "0.11.1"
+var runnerVersion = "0.11.2"
 
 // Version returns the runner build version reported at registration.
 func Version() string { return runnerVersion }

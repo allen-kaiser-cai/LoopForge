@@ -52,6 +52,7 @@ func main() {
 		LongPollTimeout:        *longPoll,
 		DisableAutoUpdate:      !*autoUpdate,
 		ManagedCLIRoot:         strings.TrimSpace(os.Getenv("AGENTFLOW_MANAGED_CLI_ROOT")),
+		WorkspaceTTL:           workspaceTTLFromEnv(),
 		DisableRunSandboxReuse: !*reuseSandbox,
 	}
 	cfg.MaxConcurrency = concurrencyFromEnv(cfg.MaxConcurrency)
@@ -135,4 +136,17 @@ func loadDotEnv() {
 			os.Setenv(k, v)
 		}
 	}
+}
+
+// workspaceTTLFromEnv 读取运行工作区保留时长，默认 7 天，0 表示关闭自动清理。
+func workspaceTTLFromEnv() time.Duration {
+	raw := strings.TrimSpace(os.Getenv("AGENTFLOW_RUNNER_WORKSPACE_TTL_HOURS"))
+	if raw == "" {
+		return 7 * 24 * time.Hour
+	}
+	hours, err := strconv.Atoi(raw)
+	if err != nil || hours < 0 {
+		return 7 * 24 * time.Hour
+	}
+	return time.Duration(hours) * time.Hour
 }
