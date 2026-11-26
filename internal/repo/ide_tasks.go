@@ -133,9 +133,16 @@ func (r *RunsRepo) RequestIDETaskSubmit(id, decision, note, token string) error 
 // ConfirmIDETask 凭 token 确认提交。
 func (r *RunsRepo) ConfirmIDETask(id, token string) error {
 	now := time.Now().UTC()
-	return r.DB.Exec(`UPDATE ide_interactive_tasks
+	res := r.DB.Exec(`UPDATE ide_interactive_tasks
 		SET status='confirmed', confirm_token='', submitted_at=?, updated_at=?
-		WHERE id=? AND confirm_token=? AND status='requested'`, now, now, id, token).Error
+		WHERE id=? AND confirm_token=? AND status='requested'`, now, now, id, token)
+	if res.Error != nil {
+		return res.Error
+	}
+	if res.RowsAffected == 0 {
+		return fmt.Errorf("确认链接无效或已过期，请重新申请提交")
+	}
+	return nil
 }
 
 // MarkIDETaskStatus 更新状态（超时/失败等）。

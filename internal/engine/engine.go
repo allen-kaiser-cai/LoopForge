@@ -118,6 +118,7 @@ func (e *Engine) StartMaintenance(ctx context.Context) {
 		go e.observationFlushLoop(ctx)
 		go e.zombieWatch(ctx)
 		go e.queuedRunPromotionLoop(ctx)
+		go e.stalledRunRecoveryLoop(ctx)
 	})
 }
 

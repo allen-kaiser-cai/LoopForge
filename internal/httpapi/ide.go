@@ -144,11 +144,42 @@ func (h *ideHandlers) confirm(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": "缺少确认 token"})
 		return
 	}
-	if err := h.repo.ConfirmIDETask(c.Param("id"), token); err != nil {
+	err := h.repo.ConfirmIDETask(c.Param("id"), token)
+	if c.Request.Method == http.MethodGet && !strings.Contains(c.GetHeader("Accept"), "application/json") {
+		h.renderConfirmPage(c, err)
+		return
+	}
+	if err != nil {
 		c.JSON(http.StatusBadRequest, map[string]string{"error": "确认失败：" + err.Error()})
 		return
 	}
 	c.JSON(http.StatusOK, map[string]any{"ok": true, "status": "confirmed"})
+}
+
+// renderConfirmPage 给钉钉里点开的确认链接返回一个简单的结果页。
+func (h *ideHandlers) renderConfirmPage(c *gin.Context, err error) {
+	ok := err == nil
+	title := "确认成功"
+	message := "已确认提交，流程会自动继续，可以关闭本页面。"
+	color := "#059669"
+	icon := "✓"
+	if !ok {
+		title = "确认失败"
+		message = err.Error()
+		color = "#DC2626"
+		icon = "!"
+	}
+	c.Header("Content-Type", "text/html; charset=utf-8")
+	c.String(http.StatusOK, `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>`+title+` · LoopForge</title>
+<style>
+body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;background:#f2f6fc;font-family:-apple-system,"Microsoft YaHei",sans-serif;color:#0f172a}
+.card{background:#fff;border:1px solid #dbe6f3;border-radius:16px;padding:40px 36px;max-width:480px;width:88%;box-shadow:0 12px 32px rgba(15,23,42,.08);text-align:center}
+.icon{width:64px;height:64px;border-radius:50%;background:`+color+`14;color:`+color+`;font-size:34px;font-weight:700;display:flex;align-items:center;justify-content:center;margin:0 auto 18px}
+h1{font-size:22px;margin:0 0 10px}p{color:#475569;line-height:1.7;margin:0;font-size:14px}
+.brand{margin-top:24px;font-size:12px;color:#94a3b8}
+</style></head><body><div class="card"><div class="icon">`+icon+`</div><h1>`+title+`</h1><p>`+message+`</p>
+<div class="brand">LoopForge · IDE + MCP 交互任务</div></div></body></html>`)
 }
 
 // GET/PUT /api/users/:id/interactive-mode
