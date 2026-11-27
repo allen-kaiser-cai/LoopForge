@@ -173,6 +173,10 @@ func (e *Engine) startWorkflowDefinition(wf domain.WorkflowDefinition, input str
 						return domain.Run{}, fmt.Errorf("环境线 %s 已停用：%s", line, note)
 					} else if def, hit := project.BranchLines[line]; hit && strings.TrimSpace(def.BaseBranch) != "" {
 						for i := range repositories {
+							// 仓库级 baseBranch 是显式覆盖（例如仓库本身没有 master），优先保留。
+							if strings.TrimSpace(repositories[i].BaseBranch) != "" {
+								continue
+							}
 							repositories[i].BaseBranch = strings.TrimSpace(def.BaseBranch)
 						}
 						log.Printf("branch line %s: base branch -> %s (run %s)", line, def.BaseBranch, id)
