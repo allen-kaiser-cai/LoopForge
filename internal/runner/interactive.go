@@ -15,6 +15,8 @@ import (
 
 // interactiveSubmit 是终端接管模式下人工提交的决策文件内容。
 type interactiveSubmit struct {
+	NodeID   string `json:"nodeId,omitempty"`
+	RunID    string `json:"runId,omitempty"`
 	Decision string `json:"decision"`
 	Note     string `json:"note,omitempty"`
 	// Target 为 rework 时的改派目标（frontend 等）。
@@ -55,6 +57,8 @@ func (d *Daemon) executeInteractiveInvocation(ctx context.Context, task domain.R
 	for _, k := range interactiveEnvKeys(env) {
 		b.WriteString("export " + k + "=" + shellQuote(env[k]) + "\n")
 	}
+	b.WriteString("export AGENTFLOW_INTERACTIVE_NODE_ID=" + shellQuote(task.NodeID) + "\n")
+	b.WriteString("export AGENTFLOW_INTERACTIVE_RUN_ID=" + shellQuote(task.RunID) + "\n")
 	b.WriteString("export CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1\n")
 	b.WriteString("exec " + shellQuote(interactiveArgv[0]))
 	for _, a := range interactiveArgv[1:] {
@@ -65,6 +69,7 @@ func (d *Daemon) executeInteractiveInvocation(ctx context.Context, task domain.R
 		return execResult{status: domain.RunnerTaskFailed, errMsg: fmt.Sprintf("write start script: %v", err)}
 	}
 	session := interactiveSessionName(task.RunID, task.NodeID)
+	sessionStarted := time.Now()
 	logPath := filepath.Join(dir, "session.log")
 	_ = os.Remove(logPath)
 	_ = os.Remove(filepath.Join(dir, "submit.json"))
@@ -98,11 +103,26 @@ func (d *Daemon) executeInteractiveInvocation(ctx context.Context, task domain.R
 			_ = exec.Command("tmux", "kill-session", "-t", session).Run()
 			return execResult{status: domain.RunnerTaskCanceled, errMsg: "task canceled"}
 		}
-		if data, err := os.ReadFile(submitPath); err == nil {
-			var sub interactiveSubmit
-			if json.Unmarshal(data, &sub) == nil && strings.TrimSpace(sub.Decision) != "" {
-				submitted = &sub
-				break
+		if info, statErr := os.Stat(submitPath); statErr == nil && !info.ModTime().Before(sessionStarted) {
+			if data, err := os.ReadFile(submitPath); err == nil {
+				var sub interactiveSubmit
+				if json.Unmarshal(data, &sub) == nil && strings.TrimSpace(sub.Decision) != "" {
+					// 提交必须属于当前节点：防止上一个节点的提交被本节点误用。
+					if strings.TrimSpace(sub.NodeID) == "" {
+						_ = os.Remove(submitPath)
+						batcher.addObservation(domain.TelemetryEvent{Category: "process", Name: "interactive.submit.invalid", Phase: "progress", Level: "warn", Message: "提交文件缺少节点标识，已忽略；请升级 lf-session 后重新提交"})
+						batcher.flush(ctx)
+						continue
+					}
+					if strings.TrimSpace(sub.NodeID) != strings.TrimSpace(task.NodeID) {
+						_ = os.Remove(submitPath)
+						batcher.addObservation(domain.TelemetryEvent{Category: "process", Name: "interactive.submit.foreign", Phase: "progress", Level: "warn", Message: "收到其他节点的提交（" + sub.NodeID + "），已忽略，本节点为 " + task.NodeID})
+						batcher.flush(ctx)
+						continue
+					}
+					submitted = &sub
+					break
+				}
 			}
 		}
 		if time.Now().After(deadline) {

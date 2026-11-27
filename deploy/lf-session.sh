@@ -44,7 +44,9 @@ target=sys.argv[4] if len(sys.argv)>4 else ""
 assignee=sys.argv[5] if len(sys.argv)>5 else ""
 path=os.path.join(ws,'.agentflow','interactive','submit.json')
 os.makedirs(os.path.dirname(path),exist_ok=True)
-json.dump({"decision":dec,"note":note,"target":target,"assignee":assignee},open(path,'w',encoding='utf-8'),ensure_ascii=False)
+node=os.environ.get("AGENTFLOW_INTERACTIVE_NODE_ID","")
+run=os.environ.get("AGENTFLOW_INTERACTIVE_RUN_ID","")
+json.dump({"nodeId":node,"runId":run,"decision":dec,"note":note,"target":target,"assignee":assignee},open(path,'w',encoding='utf-8'),ensure_ascii=False)
 print(f"已提交：{path}  decision={dec}")
 PY
     ;;
